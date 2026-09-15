@@ -1,3 +1,4 @@
+cat > .github/workflows/build.yml << 'EOF'
 name: Build APK
 
 on:
@@ -24,11 +25,15 @@ jobs:
       - name: Install buildozer
         run: pip install --upgrade buildozer cython
 
+      - name: Accept Android SDK licenses
+        run: yes | buildozer android update || true
+
       - name: Build with buildozer
-        run: buildozer -v android debug
+        run: yes | buildozer -v android debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: jinx-apk
           path: bin/*.apk
+EOF
