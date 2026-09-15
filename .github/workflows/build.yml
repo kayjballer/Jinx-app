@@ -19,7 +19,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt update
-          sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf automake libtool libtool-bin pkg-config zlib1g-dev libncurses5-dev cmake libffi-dev libssl-dev gettext autopoint
+          sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf automake libtool libtool-bin pkg-config
 
       - name: Install buildozer
         run: pip install --upgrade buildozer cython
@@ -27,8 +27,9 @@ jobs:
       - name: Accept Android SDK licenses
         run: yes | buildozer android update || true
 
-      - name: Pin pip version to avoid p4a bug
-        run: echo "PIP_CONSTRAINT=/tmp/constraints.txt" >> $GITHUB_ENV && echo "pip<24.1" > /tmp/constraints.txt
+      - name: Clean previous build
+        run: rm -rf .buildozer
+
       - name: Build with buildozer
         run: yes | buildozer -v android debug
 
