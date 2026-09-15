@@ -27,6 +27,8 @@ jobs:
       - name: Accept Android SDK licenses
         run: yes | buildozer android update || true
 
+      - name: Pin pip version to avoid p4a bug
+        run: echo "PIP_CONSTRAINT=/tmp/constraints.txt" >> $GITHUB_ENV && echo "pip<24.1" > /tmp/constraints.txt
       - name: Build with buildozer
         run: yes | buildozer -v android debug
 
