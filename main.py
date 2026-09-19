@@ -1,20 +1,45 @@
 from kivy.app import App
-from kivy.uix.button import Button
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
+from kivy.uix.button import Button
+from kivy.clock import Clock
+from kivy.utils import platform
 
 class JinxApp(App):
     def build(self):
-        layout = BoxLayout(orientation='vertical')
-        self.label = Label(text="Salut, je suis Jinx.", font_size=24)
-        bouton = Button(text="Parler a Jinx", font_size=24, size_hint=(1, 0.3))
-        bouton.bind(on_press=self.parler)
-        layout.add_widget(self.label)
-        layout.add_widget(bouton)
-        return layout
+        self.lbl = Label(text="Jinx est prete", font_size="20sp")
+        btn = Button(text="Parler a Jinx", size_hint=(1, .25))
+        btn.bind(on_release=self.ecouter)
+        root = BoxLayout(orientation="vertical")
+        root.add_widget(self.lbl)
+        root.add_widget(btn)
+        return root
 
-    def parler(self, instance):
-        self.label.text = "Jinx t'ecoute..."
+    def on_start(self):
+        if platform == "android":
+            from android.permissions import request_permissions, Permission
+            request_permissions([Permission.RECORD_AUDIO])
 
-if __name__ == "__main__":
-    JinxApp().run()
+    def ecouter(self, *a):
+        try:
+            from plyer import stt
+            self.lbl.text = "J'ecoute..."
+            stt.start()
+            Clock.schedule_once(self.fin, 6)
+        except Exception as e:
+            self.lbl.text = "Erreur STT: %s" % e
+
+    def fin(self, dt):
+        try:
+            from plyer import stt, tts
+            stt.stop()
+            texte = " ".join(stt.results) if stt.results else ""
+            if texte:
+                self.lbl.text = texte
+                tts.speak(texte)
+            else:
+                self.lbl.text = "Rien compris: %s" % (stt.errors,)
+        except Exception as e:
+            self.lbl.text = "Erreur: %s" % e
+
+JinxApp().run()
