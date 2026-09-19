@@ -4,7 +4,20 @@ from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
 from kivy.uix.widget import Widget
-from kivy.graphics import Color, Point, Mesh
+from kivy.graphics import Color, Mesh, Rectangle, Line
+from kivy.graphics.texture import Texture
+try:
+    from kivy.graphics import Callback
+    from kivy.graphics.opengl import (glBlendFunc, GL_SRC_ALPHA, GL_ONE,
+                                      GL_ONE_MINUS_SRC_ALPHA)
+
+    def _additif(*a):
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE)
+
+    def _normal(*a):
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+except Exception:
+    Callback = None
 from kivy.core.window import Window
 from kivy.metrics import dp
 from kivy.clock import Clock
@@ -55,6 +68,17 @@ def serveur_pret():
     except Exception:
         return False
 
+def cpu_features():
+    try:
+        with open("/proc/cpuinfo") as f:
+            for l in f:
+                if l.lower().startswith("features"):
+                    return l.strip()[:300]
+    except Exception as e:
+        return str(e)
+    return ""
+
+
 def lancer_cerveau(dossier, statut):
     global PROC
     if serveur_pret():
@@ -100,7 +124,7 @@ def lancer_cerveau(dossier, statut):
         t = subprocess.run([binaire, "--version"], capture_output=True,
                            text=True, timeout=30)
         if t.returncode != 0:
-            statut("Binaire KO, code %s\n%s" % (t.returncode, (t.stdout + t.stderr)[-400:]))
+            statut("Binaire KO, code %s\n%s" % (t.returncode, (t.stdout + t.stderr)[-300:] + " " + cpu_features()))
             return False
     except Exception as e:
         statut("Binaire impossible a lancer : %s" % e)
@@ -127,6 +151,48 @@ def lancer_cerveau(dossier, statut):
     return False
 
 
+ETATS = {
+    "veille": dict(vit=0.22, amp=0.025, freq=1.1, halo=0.35, hamp=0.10,
+                   onde=0.05, rate=0.25, c=(1.00, 0.70, 0.15)),
+    "ecoute": dict(vit=0.50, amp=0.050, freq=3.0, halo=0.55, hamp=0.20,
+                   onde=0.45, rate=0.50, c=(1.00, 0.86, 0.38)),
+    "reflexion": dict(vit=1.50, amp=0.050, freq=5.0, halo=0.60, hamp=0.30,
+                      onde=0.55, rate=0.90, c=(1.00, 0.52, 0.10)),
+    "parle": dict(vit=0.45, amp=0.080, freq=6.0, halo=0.75, hamp=0.45,
+                  onde=0.70, rate=0.70, c=(1.00, 0.78, 0.22)),
+}
+
+
+def texture_douce(n=64):
+    c = (n - 1) / 2.0
+    buf = bytearray()
+    for y in range(n):
+        for x in range(n):
+            d = math.hypot(x - c, y - c) / c
+            a = max(0.0, 1.0 - d)
+            a = a * a * (3 - 2 * a)
+            buf += bytes((255, 255, 255, int(255 * a)))
+    tex = Texture.create(size=(n, n), colorfmt="rgba")
+    tex.blit_buffer(bytes(buf), colorfmt="rgba", bufferfmt="ubyte")
+    tex.mag_filter = "linear"
+    tex.min_filter = "linear"
+    return tex
+
+
+def quads(m):
+    return [i for q in range(m)
+            for i in (4 * q, 4 * q + 1, 4 * q + 2, 4 * q, 4 * q + 2, 4 * q + 3)]
+
+
+def unit(v):
+    l = math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) or 1.0
+    return (v[0] / l, v[1] / l, v[2] / l)
+
+
+def alea3():
+    return unit([random.gauss(0, 1) for _ in range(3)])
+
+
 class Bulle(Widget):
     def __init__(self, on_tap, **kw):
         super().__init__(**kw)
@@ -135,80 +201,215 @@ class Bulle(Widget):
         self.t = 0.0
         self.ay = 0.0
         self.ax = 0.35
-        self.vit = 0.25
-        self.amp = 0.03
-        random.seed(7)
-        n = 170
+        self.ph_onde = 0.0
+        self.p = dict(vit=0.22, amp=0.025, halo=0.35, hamp=0.10, onde=0.05,
+                      rate=0.25, r=1.0, g=0.70, b=0.15)
+        random.seed(11)
+        tex = texture_douce()
+        n0 = 150
         gold = math.pi * (3 - math.sqrt(5))
         self.pts = []
-        for i in range(n):
-            y = 1 - 2 * (i + 0.5) / n
+        self.tai = []
+        for i in range(n0):
+            y = 1 - 2 * (i + 0.5) / n0
             r = math.sqrt(1 - y * y)
             th = gold * i
-            k = random.uniform(0.82, 1.08)
+            k = random.uniform(0.80, 1.06)
             self.pts.append((math.cos(th) * r * k, y * k, math.sin(th) * r * k))
+            self.tai.append(random.uniform(0.6, 1.3))
+        for i in range(40):
+            u = alea3()
+            k = random.uniform(1.10, 1.40)
+            self.pts.append((u[0] * k, u[1] * k, u[2] * k))
+            self.tai.append(random.uniform(0.35, 0.70))
+        self.n0 = n0
+        self.n = len(self.pts)
+        self.ph = [random.uniform(0, 6.28) for _ in range(self.n)]
         idx = []
-        for i in range(n):
-            for j in range(i + 1, n):
+        for i in range(n0):
+            for j in range(i + 1, n0):
                 dx = self.pts[i][0] - self.pts[j][0]
                 dy = self.pts[i][1] - self.pts[j][1]
                 dz = self.pts[i][2] - self.pts[j][2]
-                if dx * dx + dy * dy + dz * dz < 0.13:
+                if dx * dx + dy * dy + dz * dz < 0.15:
                     idx += [i, j]
+        self.bok = []
+        self.bokt = []
+        for i in range(9):
+            u = alea3()
+            k = random.uniform(0.45, 1.15)
+            self.bok.append((u[0] * k, u[1] * k, u[2] * k))
+            self.bokt.append(random.uniform(0.8, 1.6))
+        self.stk = []
+        for i in range(30):
+            u = alea3()
+            k = random.uniform(0.75, 1.30)
+            a = (u[0] * k, u[1] * k, u[2] * k)
+            w = [random.gauss(0, 1) for _ in range(3)]
+            d = w[0] * u[0] + w[1] * u[1] + w[2] * u[2]
+            tg = unit([w[0] - u[0] * d, w[1] - u[1] * d, w[2] - u[2] * d])
+            ln = random.uniform(0.10, 0.28)
+            self.stk.append((a, (a[0] + tg[0] * ln, a[1] + tg[1] * ln,
+                                 a[2] + tg[2] * ln)))
+        self.anneaux = []
+        self.vit_an = (1.0, -0.7, 0.55)
+        for (tx, tz, rr) in ((0.0, 0.0, 1.0), (1.05, 0.5, 1.12),
+                             (-0.8, 1.1, 0.92)):
+            base = []
+            for q in range(72):
+                a = 2 * math.pi * q / 72
+                x, y, z = math.cos(a) * rr, 0.0, math.sin(a) * rr
+                y1 = y * math.cos(tx) - z * math.sin(tx)
+                z1 = y * math.sin(tx) + z * math.cos(tx)
+                x2 = x * math.cos(tz) - y1 * math.sin(tz)
+                y2 = x * math.sin(tz) + y1 * math.cos(tz)
+                base.append((x2, y2, z1))
+            self.anneaux.append(base)
+        ns = len(self.stk)
         with self.canvas:
-            self.c_lignes = Color(0.1, 0.8, 1, 0.30)
-            self.mesh = Mesh(vertices=[0, 0, 0, 0] * n, indices=idx,
-                             mode="lines")
-            self.c_pts = []
-            self.groupes = []
-            for taille in (dp(1.2), dp(2.0), dp(3.0)):
-                self.c_pts.append(Color(0.4, 0.9, 1, 1))
-                self.groupes.append(Point(points=[0, 0], pointsize=taille))
-        self.set_etat("veille")
+            if Callback:
+                Callback(_additif)
+            self.c_halo = Color(1, 0.7, 0.15, 0.35)
+            self.r_halo = Rectangle(texture=tex, pos=(0, 0), size=(1, 1))
+            self.c_ondes = []
+            self.l_ondes = []
+            for i in range(3):
+                self.c_ondes.append(Color(1, 0.7, 0.15, 0))
+                self.l_ondes.append(Line(circle=(0, 0, 1), width=dp(1.2)))
+            self.c_res = Color(1, 0.7, 0.15, 0.14)
+            self.m_res = Mesh(vertices=[0, 0, 0, 0] * n0, indices=idx,
+                              mode="lines")
+            self.c_an = Color(1, 0.7, 0.15, 0.6)
+            self.l_an = [Line(points=[0, 0, 0, 0], width=dp(1.1))
+                         for _ in self.anneaux]
+            self.c_stk = Color(1, 0.8, 0.3, 0.6)
+            self.m_stk = Mesh(vertices=[0, 0, 0, 0] * (2 * ns),
+                              indices=list(range(2 * ns)), mode="lines")
+            self.c_bok = Color(1, 0.7, 0.15, 0.12)
+            self.m_bok = Mesh(vertices=[0, 0, 0, 0] * 36, indices=quads(9),
+                              mode="triangles", texture=tex)
+            self.c_p = Color(1, 0.9, 0.5, 0.95)
+            self.m_p = Mesh(vertices=[0, 0, 0, 0] * (4 * self.n),
+                            indices=quads(self.n), mode="triangles",
+                            texture=tex)
+            self.c_noy = Color(1, 0.9, 0.5, 0.6)
+            self.r_noy = Rectangle(texture=tex, pos=(0, 0), size=(1, 1))
+            self.c_arcs = Color(1, 0.9, 0.5, 0.85)
+            self.l_arcs = [Line(circle=(0, 0, 1, 0, 90), width=dp(1.4))
+                           for _ in range(3)]
+            if Callback:
+                Callback(_normal)
         Clock.schedule_interval(self.maj, 1 / 30.0)
 
     def set_etat(self, e):
         self.etat = e
-        r, g, b = ETATS[e][3]
-        self.c_lignes.rgba = (r, g, b, 0.30)
-        for c, al in zip(self.c_pts, (0.35, 0.70, 1.0)):
-            c.rgba = (min(1, r + 0.3), min(1, g + 0.2), min(1, b + 0.1), al)
 
     def rayon(self):
-        return min(self.width, self.height) * 0.42
+        return min(self.width, self.height) * 0.36
 
     def maj(self, dt):
         self.t += dt
-        v, a, f, _ = ETATS[self.etat]
+        t = self.t
+        e = ETATS[self.etat]
+        p = self.p
         k = min(1.0, dt * 3)
-        self.vit += (v - self.vit) * k
-        self.amp += (a - self.amp) * k
-        self.ay += self.vit * dt
+        for c in ("vit", "amp", "halo", "hamp", "onde", "rate"):
+            p[c] += (e[c] - p[c]) * k
+        for c, v in zip("rgb", e["c"]):
+            p[c] += (v - p[c]) * k
+        r, g, b = p["r"], p["g"], p["b"]
+        self.ay += p["vit"] * dt
+        self.ph_onde += p["rate"] * dt
         cx, cy = self.center_x, self.center_y
-        R = self.rayon() * (1 + self.amp * math.sin(self.t * f))
+        base = self.rayon()
+        if self.etat == "parle":
+            env = abs(math.sin(t * 7.3) * math.sin(t * 3.1 + 1.0) * 0.6
+                      + math.sin(t * 11.7) * 0.4) * 1.4
+            env = min(1.0, env)
+        else:
+            env = 0.5 + 0.5 * math.sin(t * e["freq"])
+        R = base * (1 + p["amp"] * (2 * env - 1))
+        hs = base * (2.4 + 2.2 * p["hamp"] * env)
+        self.c_halo.rgba = (r, g * 0.92, b * 0.85,
+                            p["halo"] * (0.55 + 0.45 * env))
+        self.r_halo.pos = (cx - hs, cy - hs)
+        self.r_halo.size = (2 * hs, 2 * hs)
+        for i in range(3):
+            ph = (self.ph_onde + i / 3.0) % 1.0
+            self.c_ondes[i].rgba = (r, g, b, p["onde"] * (1 - ph) ** 1.6)
+            self.l_ondes[i].circle = (cx, cy, R * (1.05 + 1.1 * ph))
         cay, say = math.cos(self.ay), math.sin(self.ay)
         cax, sax = math.cos(self.ax), math.sin(self.ax)
-        verts = []
-        g = [[], [], []]
-        for (x, y, z) in self.pts:
+
+        def proj(x, y, z):
             x1 = x * cay + z * say
             z1 = -x * say + z * cay
             y2 = y * cax - z1 * sax
             z2 = y * sax + z1 * cax
             s = 1 + z2 * 0.2
-            px = cx + x1 * R * s
-            py = cy + y2 * R * s
-            verts += [px, py, 0, 0]
-            b = 0 if z2 < -0.33 else (1 if z2 < 0.33 else 2)
-            g[b] += [px, py]
-        self.mesh.vertices = verts
-        for i in range(3):
-            self.groupes[i].points = g[i] if g[i] else [0, 0]
+            return cx + x1 * R * s, cy + y2 * R * s, z2
+
+        u1 = dp(6)
+        vs = []
+        res = []
+        for i in range(self.n):
+            x, y, z = self.pts[i]
+            px, py, z2 = proj(x, y, z)
+            h = (u1 * self.tai[i] * max(0.3, 0.7 + 0.35 * z2)
+                 * (0.85 + 0.15 * math.sin(t * 2.5 + self.ph[i])))
+            vs += [px - h, py - h, 0, 0, px + h, py - h, 1, 0,
+                   px + h, py + h, 1, 1, px - h, py + h, 0, 1]
+            if i < self.n0:
+                res += [px, py, 0, 0]
+        self.m_p.vertices = vs
+        self.m_res.vertices = res
+        bv = []
+        for i in range(9):
+            x, y, z = self.bok[i]
+            px, py, z2 = proj(x, y, z)
+            h = R * 0.08 * self.bokt[i]
+            bv += [px - h, py - h, 0, 0, px + h, py - h, 1, 0,
+                   px + h, py + h, 1, 1, px - h, py + h, 0, 1]
+        self.m_bok.vertices = bv
+        sv = []
+        for (pa, pb) in self.stk:
+            ax_, ay_, _ = proj(*pa)
+            bx_, by_, _ = proj(*pb)
+            sv += [ax_, ay_, 0, 0, bx_, by_, 0, 0]
+        self.m_stk.vertices = sv
+        for j in range(3):
+            pts = self.anneaux[j]
+            st = int(t * self.vit_an[j] * 12) % 72
+            lst = []
+            for q in range(46):
+                x, y, z = pts[(st + q) % 72]
+                px, py, _ = proj(x, y, z)
+                lst += [px, py]
+            self.l_an[j].points = lst
+        self.c_res.rgba = (r, g, b, 0.14)
+        self.c_an.rgba = (r, g, b, 0.6)
+        self.c_stk.rgba = (r, min(1, g + 0.12), min(1, b + 0.15),
+                           0.3 + 0.35 * (0.5 + 0.5 * math.sin(t * 9)))
+        self.c_bok.rgba = (r, g * 0.9, b, 0.10 + 0.06 * env)
+        self.c_p.rgba = (min(1, r + 0.05), min(1, g + 0.15),
+                         min(1, b + 0.3), 0.95)
+        ch = R * (0.32 + 0.10 * env)
+        self.c_noy.rgba = (min(1, r + 0.05), min(1, g + 0.2),
+                           min(1, b + 0.35), 0.5 + 0.4 * env)
+        self.r_noy.pos = (cx - ch, cy - ch)
+        self.r_noy.size = (2 * ch, 2 * ch)
+        self.c_arcs.rgba = (min(1, r + 0.05), min(1, g + 0.2),
+                            min(1, b + 0.35), 0.85)
+        for j, (rad, span, sp) in enumerate(((0.10, 250, 1.0),
+                                             (0.17, 200, -1.4),
+                                             (0.25, 300, 0.7))):
+            a0 = (t * sp * 60 * (1 + p["vit"])) % 360
+            self.l_arcs[j].circle = (cx, cy, R * rad, a0, a0 + span)
 
     def on_touch_down(self, touch):
         dx = touch.x - self.center_x
         dy = touch.y - self.center_y
-        if dx * dx + dy * dy < (self.rayon() * 1.15) ** 2:
+        if dx * dx + dy * dy < (self.rayon() * 1.3) ** 2:
             self.on_tap()
             return True
         return super().on_touch_down(touch)
@@ -216,19 +417,20 @@ class Bulle(Widget):
 
 class JinxApp(App):
     def build(self):
-        Window.clearcolor = (0.02, 0.03, 0.06, 1)
+        Window.clearcolor = (0.02, 0.015, 0.01, 1)
         self.occupe = False
         self.pret = False
         root = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(6))
         titre = Label(text="J.I.N.X", font_size="22sp", bold=True,
-                      color=(0.2, 0.9, 1, 1), size_hint=(1, .07))
-        self.bulle = Bulle(self.ecouter, size_hint=(1, .50))
+                      color=(1, 0.75, 0.25, 1), size_hint=(1, .07))
+        self.bulle = Bulle(self.ecouter, size_hint=(1, .56))
         self.etat_lbl = Label(text="Touche la bulle pour parler",
-                              font_size="14sp", color=(0.3, 0.7, 0.85, 1),
+                              font_size="14sp", color=(0.85, 0.65, 0.30, 1),
                               size_hint=(1, .07))
         self.lbl = Label(text="", font_size="18sp", halign="center",
-                         valign="top", size_hint=(1, .36))
+                         valign="top", size_hint=(1, .30))
         self.lbl.bind(size=lambda w, s: setattr(w, "text_size", s))
+        self.lbl.color = (1, 0.93, 0.78, 1)
         for w in (titre, self.bulle, self.etat_lbl, self.lbl):
             root.add_widget(w)
         return root
