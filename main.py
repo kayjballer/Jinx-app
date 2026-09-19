@@ -7,7 +7,8 @@ from kivy.utils import platform
 
 class JinxApp(App):
     def build(self):
-        self.lbl = Label(text="Jinx est prete", font_size="20sp")
+        self.lbl = Label(text="Jinx est prete", font_size="20sp", halign="center", valign="middle")
+        self.lbl.bind(size=lambda w, s: setattr(w, "text_size", s))
         btn = Button(text="Parler a Jinx", size_hint=(1, .25))
         btn.bind(on_release=self.ecouter)
         root = BoxLayout(orientation="vertical")
@@ -24,6 +25,7 @@ class JinxApp(App):
         try:
             from plyer import stt
             self.lbl.text = "J'ecoute..."
+            stt.language = "fr-FR"
             stt.start()
             Clock.schedule_once(self.fin, 6)
         except Exception as e:
@@ -33,7 +35,7 @@ class JinxApp(App):
         try:
             from plyer import stt, tts
             stt.stop()
-            texte = " ".join(stt.results) if stt.results else ""
+            texte = stt.results[-1] if stt.results else ""
             if texte:
                 self.lbl.text = texte
                 tts.speak(texte)
