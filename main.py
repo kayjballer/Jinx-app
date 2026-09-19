@@ -1,4 +1,4 @@
-import json, threading, re, time, math, random, os, subprocess
+import json, threading, re, time, math, random, os, subprocess, ssl
 from urllib import request
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
@@ -42,6 +42,11 @@ def demander_ia(question):
 
 MODELE_URL = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf"
 PROC = None
+try:
+    import certifi
+    CTX = ssl.create_default_context(cafile=certifi.where())
+except Exception:
+    CTX = ssl.create_default_context()
 
 def serveur_pret():
     try:
@@ -71,7 +76,7 @@ def lancer_cerveau(dossier, statut):
         if reprise:
             en_tetes["Range"] = "bytes=%d-" % reprise
         req = request.Request(MODELE_URL, headers=en_tetes)
-        with request.urlopen(req, timeout=60) as r:
+        with request.urlopen(req, timeout=60, context=CTX) as r:
             if r.status != 206:
                 reprise = 0
             total = reprise + int(r.headers.get("Content-Length") or 1117320736)
@@ -228,9 +233,11 @@ class JinxApp(App):
         self.occupe = True
         self.pret = False
         self.bulle.set_etat("reflexion")
+        self.etat_lbl.text = "Preparation du cerveau..."
+        self.lbl.text = ""
 
         def statut(t):
-            Clock.schedule_once(lambda d: setattr(self.etat_lbl, "text", t))
+            Clock.schedule_once(lambda d: setattr(self.lbl, "text", t))
 
         def tache():
             try:
@@ -246,7 +253,10 @@ class JinxApp(App):
         self.occupe = False
         self.bulle.set_etat("veille")
         if ok:
+            self.lbl.text = ""
             self.etat_lbl.text = "Touche la bulle pour parler"
+        else:
+            self.etat_lbl.text = "Touche la bulle pour reessayer"
 
     def ecouter(self):
         if self.occupe:
