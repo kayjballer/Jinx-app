@@ -1,4 +1,4 @@
-import json, threading, re, time, math, random
+import json, threading, re, time, math, random, os, subprocess
 from urllib import request
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
@@ -38,6 +38,71 @@ def demander_ia(question):
     with request.urlopen(req, timeout=120) as r:
         rep = json.loads(r.read())
     return rep["choices"][0]["message"]["content"].strip()
+
+
+MODELE_URL = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf"
+PROC = None
+
+def serveur_pret():
+    try:
+        with request.urlopen("http://127.0.0.1:8080/health", timeout=2) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+def lancer_cerveau(dossier, statut):
+    global PROC
+    if serveur_pret():
+        return True
+    if platform != "android":
+        statut("Pas de serveur : lance llama-server")
+        return False
+    from jnius import autoclass
+    act = autoclass("org.kivy.android.PythonActivity").mActivity
+    binaire = act.getApplicationInfo().nativeLibraryDir + "/libllama_server.so"
+    if not os.path.exists(binaire):
+        statut("Serveur IA absent de l APK")
+        return False
+    modele = os.path.join(dossier, "qwen.gguf")
+    if not os.path.exists(modele) or os.path.getsize(modele) < 1000000000:
+        tmp = modele + ".part"
+        reprise = os.path.getsize(tmp) if os.path.exists(tmp) else 0
+        en_tetes = {"User-Agent": "Jinx"}
+        if reprise:
+            en_tetes["Range"] = "bytes=%d-" % reprise
+        req = request.Request(MODELE_URL, headers=en_tetes)
+        with request.urlopen(req, timeout=60) as r:
+            if r.status != 206:
+                reprise = 0
+            total = reprise + int(r.headers.get("Content-Length") or 1117320736)
+            fait = reprise
+            dernier = 0
+            with open(tmp, "ab" if reprise else "wb") as f:
+                while True:
+                    bloc = r.read(1 << 20)
+                    if not bloc:
+                        break
+                    f.write(bloc)
+                    fait += len(bloc)
+                    if time.time() - dernier > 1:
+                        dernier = time.time()
+                        statut("Telechargement du cerveau : %d %%" % (fait * 100 // total))
+        os.replace(tmp, modele)
+    log = open(os.path.join(dossier, "serveur.log"), "w")
+    PROC = subprocess.Popen(
+        [binaire, "-m", modele, "--host", "127.0.0.1", "--port", "8080",
+         "-c", "2048", "-t", "4"],
+        stdout=log, stderr=subprocess.STDOUT)
+    statut("Chargement du cerveau...")
+    for _ in range(180):
+        if serveur_pret():
+            return True
+        if PROC.poll() is not None:
+            statut("Le serveur s est arrete (voir serveur.log)")
+            return False
+        time.sleep(1)
+    statut("Le serveur ne repond pas")
+    return False
 
 
 class Bulle(Widget):
@@ -131,6 +196,7 @@ class JinxApp(App):
     def build(self):
         Window.clearcolor = (0.02, 0.03, 0.06, 1)
         self.occupe = False
+        self.pret = False
         root = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(6))
         titre = Label(text="J.I.N.X", font_size="22sp", bold=True,
                       color=(0.2, 0.9, 1, 1), size_hint=(1, .07))
@@ -149,9 +215,44 @@ class JinxApp(App):
         if platform == "android":
             from android.permissions import request_permissions, Permission
             request_permissions([Permission.RECORD_AUDIO])
+        self.demarrer_cerveau()
+
+    def on_stop(self):
+        if PROC is not None:
+            try:
+                PROC.terminate()
+            except Exception:
+                pass
+
+    def demarrer_cerveau(self):
+        self.occupe = True
+        self.pret = False
+        self.bulle.set_etat("reflexion")
+
+        def statut(t):
+            Clock.schedule_once(lambda d: setattr(self.etat_lbl, "text", t))
+
+        def tache():
+            try:
+                ok = lancer_cerveau(self.user_data_dir, statut)
+            except Exception as e:
+                ok = False
+                statut("Erreur cerveau : %s" % e)
+            Clock.schedule_once(lambda d: self.cerveau_pret(ok))
+        threading.Thread(target=tache, daemon=True).start()
+
+    def cerveau_pret(self, ok):
+        self.pret = ok
+        self.occupe = False
+        self.bulle.set_etat("veille")
+        if ok:
+            self.etat_lbl.text = "Touche la bulle pour parler"
 
     def ecouter(self):
         if self.occupe:
+            return
+        if not self.pret:
+            self.demarrer_cerveau()
             return
         self.occupe = True
         self.bulle.set_etat("ecoute")

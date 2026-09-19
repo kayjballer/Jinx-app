@@ -7,6 +7,7 @@ source.include_exts = py,png,jpg,kv,atlas
 version = 0.1
 requirements = python3==3.11.5,hostpython3==3.11.5,kivy==2.3.0,plyer,pyjnius,android
 android.archs = arm64-v8a
+android.add_libs_arm64_v8a = libs/arm64-v8a/*.so
 orientation = portrait
 fullscreen = 0
 android.permissions = RECORD_AUDIO,INTERNET
