@@ -36,6 +36,11 @@ jobs:
       - name: Clean previous build
         run: rm -rf .buildozer
 
+      - name: Cache debug keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: debug-keystore-v1
       - name: Compile llama-server (arm64)
         run: |
           git clone --depth 1 https://github.com/ggml-org/llama.cpp /tmp/llama.cpp

@@ -69,7 +69,7 @@ def lancer_cerveau(dossier, statut):
         statut("Serveur IA absent de l APK")
         return False
     modele = os.path.join(dossier, "qwen.gguf")
-    if not os.path.exists(modele) or os.path.getsize(modele) < 1000000000:
+    if not os.path.exists(modele) or os.path.getsize(modele) < 1100000000:
         tmp = modele + ".part"
         reprise = os.path.getsize(tmp) if os.path.exists(tmp) else 0
         en_tetes = {"User-Agent": "Jinx"}
@@ -92,7 +92,19 @@ def lancer_cerveau(dossier, statut):
                     if time.time() - dernier > 1:
                         dernier = time.time()
                         statut("Telechargement du cerveau : %d %%" % (fait * 100 // total))
+        if os.path.getsize(tmp) < 1100000000:
+            statut("Telechargement incomplet, touche la bulle pour reprendre")
+            return False
         os.replace(tmp, modele)
+    try:
+        t = subprocess.run([binaire, "--version"], capture_output=True,
+                           text=True, timeout=30)
+        if t.returncode != 0:
+            statut("Binaire KO, code %s\n%s" % (t.returncode, (t.stdout + t.stderr)[-400:]))
+            return False
+    except Exception as e:
+        statut("Binaire impossible a lancer : %s" % e)
+        return False
     log = open(os.path.join(dossier, "serveur.log"), "w")
     PROC = subprocess.Popen(
         [binaire, "-m", modele, "--host", "127.0.0.1", "--port", "8080",
@@ -103,7 +115,12 @@ def lancer_cerveau(dossier, statut):
         if serveur_pret():
             return True
         if PROC.poll() is not None:
-            statut("Le serveur s est arrete (voir serveur.log)")
+            try:
+                with open(os.path.join(dossier, "serveur.log")) as lf:
+                    fin = lf.read()[-500:]
+            except Exception as e:
+                fin = str(e)
+            statut("Serveur arrete, code %s\n%s" % (PROC.returncode, fin))
             return False
         time.sleep(1)
     statut("Le serveur ne repond pas")
