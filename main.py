@@ -1,9 +1,12 @@
-import json, threading, re, time
+import json, threading, re, time, math, random
 from urllib import request
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
-from kivy.uix.button import Button
+from kivy.uix.widget import Widget
+from kivy.graphics import Color, Point, Mesh
+from kivy.core.window import Window
+from kivy.metrics import dp
 from kivy.clock import Clock
 from kivy.utils import platform
 
@@ -11,6 +14,14 @@ URL = "http://127.0.0.1:8080/v1/chat/completions"
 SYSTEM = ("Tu es Jinx, une assistante vocale au caractere vif, moqueur et un peu chaotique. "
           "Tu tutoies toujours, jamais de vouvoiement. Ne dis jamais comment puis-je vous aider. "
           "Reponds toujours en francais, en 1 ou 2 phrases courtes.")
+
+# vitesse de rotation, amplitude du pouls, frequence du pouls, couleur
+ETATS = {
+    "veille":    (0.25, 0.03, 1.2, (0.10, 0.80, 1.00)),
+    "ecoute":    (0.70, 0.10, 4.0, (0.20, 1.00, 0.70)),
+    "reflexion": (1.60, 0.06, 6.0, (0.80, 0.40, 1.00)),
+    "parle":     (0.50, 0.12, 7.0, (1.00, 0.65, 0.20)),
+}
 
 def corriger(t):
     return re.sub(r"\b(jenkins|jinks|gingks|jean x|djinx|ginx|gynx)\b",
@@ -28,18 +39,110 @@ def demander_ia(question):
         rep = json.loads(r.read())
     return rep["choices"][0]["message"]["content"].strip()
 
+
+class Bulle(Widget):
+    def __init__(self, on_tap, **kw):
+        super().__init__(**kw)
+        self.on_tap = on_tap
+        self.etat = "veille"
+        self.t = 0.0
+        self.ay = 0.0
+        self.ax = 0.35
+        self.vit = 0.25
+        self.amp = 0.03
+        random.seed(7)
+        n = 170
+        gold = math.pi * (3 - math.sqrt(5))
+        self.pts = []
+        for i in range(n):
+            y = 1 - 2 * (i + 0.5) / n
+            r = math.sqrt(1 - y * y)
+            th = gold * i
+            k = random.uniform(0.82, 1.08)
+            self.pts.append((math.cos(th) * r * k, y * k, math.sin(th) * r * k))
+        idx = []
+        for i in range(n):
+            for j in range(i + 1, n):
+                dx = self.pts[i][0] - self.pts[j][0]
+                dy = self.pts[i][1] - self.pts[j][1]
+                dz = self.pts[i][2] - self.pts[j][2]
+                if dx * dx + dy * dy + dz * dz < 0.13:
+                    idx += [i, j]
+        with self.canvas:
+            self.c_lignes = Color(0.1, 0.8, 1, 0.30)
+            self.mesh = Mesh(vertices=[0, 0, 0, 0] * n, indices=idx,
+                             mode="lines")
+            self.c_pts = []
+            self.groupes = []
+            for taille in (dp(1.2), dp(2.0), dp(3.0)):
+                self.c_pts.append(Color(0.4, 0.9, 1, 1))
+                self.groupes.append(Point(points=[0, 0], pointsize=taille))
+        self.set_etat("veille")
+        Clock.schedule_interval(self.maj, 1 / 30.0)
+
+    def set_etat(self, e):
+        self.etat = e
+        r, g, b = ETATS[e][3]
+        self.c_lignes.rgba = (r, g, b, 0.30)
+        for c, al in zip(self.c_pts, (0.35, 0.70, 1.0)):
+            c.rgba = (min(1, r + 0.3), min(1, g + 0.2), min(1, b + 0.1), al)
+
+    def rayon(self):
+        return min(self.width, self.height) * 0.42
+
+    def maj(self, dt):
+        self.t += dt
+        v, a, f, _ = ETATS[self.etat]
+        k = min(1.0, dt * 3)
+        self.vit += (v - self.vit) * k
+        self.amp += (a - self.amp) * k
+        self.ay += self.vit * dt
+        cx, cy = self.center_x, self.center_y
+        R = self.rayon() * (1 + self.amp * math.sin(self.t * f))
+        cay, say = math.cos(self.ay), math.sin(self.ay)
+        cax, sax = math.cos(self.ax), math.sin(self.ax)
+        verts = []
+        g = [[], [], []]
+        for (x, y, z) in self.pts:
+            x1 = x * cay + z * say
+            z1 = -x * say + z * cay
+            y2 = y * cax - z1 * sax
+            z2 = y * sax + z1 * cax
+            s = 1 + z2 * 0.2
+            px = cx + x1 * R * s
+            py = cy + y2 * R * s
+            verts += [px, py, 0, 0]
+            b = 0 if z2 < -0.33 else (1 if z2 < 0.33 else 2)
+            g[b] += [px, py]
+        self.mesh.vertices = verts
+        for i in range(3):
+            self.groupes[i].points = g[i] if g[i] else [0, 0]
+
+    def on_touch_down(self, touch):
+        dx = touch.x - self.center_x
+        dy = touch.y - self.center_y
+        if dx * dx + dy * dy < (self.rayon() * 1.15) ** 2:
+            self.on_tap()
+            return True
+        return super().on_touch_down(touch)
+
+
 class JinxApp(App):
     def build(self):
-        self.mode = "off"
-        self.t0 = 0
-        self.lbl = Label(text="Jinx dort", font_size="20sp",
-                         halign="center", valign="middle")
+        Window.clearcolor = (0.02, 0.03, 0.06, 1)
+        self.occupe = False
+        root = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(6))
+        titre = Label(text="J.I.N.X", font_size="22sp", bold=True,
+                      color=(0.2, 0.9, 1, 1), size_hint=(1, .07))
+        self.bulle = Bulle(self.ecouter, size_hint=(1, .50))
+        self.etat_lbl = Label(text="Touche la bulle pour parler",
+                              font_size="14sp", color=(0.3, 0.7, 0.85, 1),
+                              size_hint=(1, .07))
+        self.lbl = Label(text="", font_size="18sp", halign="center",
+                         valign="top", size_hint=(1, .36))
         self.lbl.bind(size=lambda w, s: setattr(w, "text_size", s))
-        self.btn = Button(text="Activer Jinx", size_hint=(1, .2))
-        self.btn.bind(on_release=self.basculer)
-        root = BoxLayout(orientation="vertical")
-        root.add_widget(self.lbl)
-        root.add_widget(self.btn)
+        for w in (titre, self.bulle, self.etat_lbl, self.lbl):
+            root.add_widget(w)
         return root
 
     def on_start(self):
@@ -47,26 +150,13 @@ class JinxApp(App):
             from android.permissions import request_permissions, Permission
             request_permissions([Permission.RECORD_AUDIO])
 
-    def basculer(self, *a):
-        if self.mode == "off":
-            self.mode = "veille"
-            self.btn.text = "Arreter Jinx"
-            self.lbl.text = "Dis 'Jinx'..."
-            self.demarrer()
-        else:
-            self.mode = "off"
-            self.btn.text = "Activer Jinx"
-            self.lbl.text = "Jinx dort"
-            Clock.unschedule(self.surveiller)
-            try:
-                from plyer import stt
-                stt.stop()
-            except Exception:
-                pass
-
-    def demarrer(self, *a):
-        if self.mode == "off":
+    def ecouter(self):
+        if self.occupe:
             return
+        self.occupe = True
+        self.bulle.set_etat("ecoute")
+        self.etat_lbl.text = "J'ecoute..."
+        self.lbl.text = ""
         try:
             from plyer import stt
             stt.results = []
@@ -75,56 +165,55 @@ class JinxApp(App):
             stt.language = "fr-FR"
             stt.start()
             self.t0 = time.time()
-            Clock.unschedule(self.surveiller)
-            Clock.schedule_interval(self.surveiller, 0.4)
+            self.tchange = self.t0
+            self.sig = None
+            Clock.schedule_interval(self.surveiller, 0.3)
         except Exception as e:
-            self.lbl.text = "Erreur STT: %s" % e
-            Clock.schedule_once(self.demarrer, 3)
+            self.repos("Erreur STT: %s" % e)
+
+    def texte_courant(self, stt):
+        part = getattr(stt, "partial_results", None) or []
+        if stt.results:
+            return stt.results[-1]
+        if part:
+            return part[-1]
+        return ""
 
     def surveiller(self, dt):
         from plyer import stt
-        limite = 8 if self.mode == "veille" else 15
-        if not (stt.results or stt.errors or time.time() - self.t0 > limite):
+        now = time.time()
+        texte = self.texte_courant(stt)
+        sig = (len(stt.results), texte)
+        if sig != self.sig:
+            self.sig = sig
+            self.tchange = now
+            if texte:
+                self.lbl.text = texte
+        fini = False
+        if texte and now - self.tchange > 1.4:
+            fini = True
+        elif not texte and (stt.errors or now - self.t0 > 7):
+            fini = True
+        elif now - self.t0 > 14:
+            fini = True
+        if not fini:
             return
         Clock.unschedule(self.surveiller)
-        texte = ""
-        if stt.results:
-            texte = stt.results[-1]
-        elif stt.partial_results:
-            texte = stt.partial_results[-1]
+        erreurs = stt.errors
         try:
             stt.stop()
         except Exception:
             pass
-        Clock.schedule_once(lambda d: self.traiter(texte), 0.3)
-
-    def traiter(self, texte):
-        if self.mode == "off":
-            return
         texte = corriger(texte).strip()
-        if self.mode == "veille":
-            if re.search(r"\bjinx\b", texte, re.I):
-                cmd = re.sub(r"^.*?\bjinx\b[\s,!.?]*", "", texte,
-                             count=1, flags=re.I).strip()
-                if cmd:
-                    self.envoyer(cmd)
-                else:
-                    self.mode = "actif"
-                    self.lbl.text = "Oui ? Je t'ecoute..."
-                    self.parler("Oui ?")
-                    Clock.schedule_once(self.demarrer, 1.2)
-            else:
-                self.demarrer()
-        else:
-            if texte:
-                self.envoyer(texte)
-            else:
-                self.mode = "veille"
-                self.lbl.text = "Dis 'Jinx'..."
-                self.demarrer()
+        if not texte:
+            self.repos("Rien compris %s" % (erreurs,))
+            return
+        self.envoyer(texte)
 
     def envoyer(self, texte):
-        self.lbl.text = "Toi : %s\nJinx reflechit..." % texte
+        self.bulle.set_etat("reflexion")
+        self.etat_lbl.text = "Je reflechis..."
+        self.lbl.text = "Toi : %s" % texte
         threading.Thread(target=self.penser, args=(texte,),
                          daemon=True).start()
 
@@ -136,18 +225,21 @@ class JinxApp(App):
         Clock.schedule_once(lambda d: self.repondre(texte, rep))
 
     def repondre(self, texte, rep):
-        if self.mode == "off":
-            return
-        self.lbl.text = "Toi : %s\nJinx : %s" % (texte, rep)
-        self.parler(rep)
-        self.mode = "veille"
-        Clock.schedule_once(self.demarrer, 1.5 + len(rep) * 0.075)
-
-    def parler(self, texte):
+        self.bulle.set_etat("parle")
+        self.etat_lbl.text = "Jinx parle..."
+        self.lbl.text = "Toi : %s\n\nJinx : %s" % (texte, rep)
         try:
             from plyer import tts
-            tts.speak(texte)
+            tts.speak(rep)
         except Exception as e:
             self.lbl.text += "\nErreur voix: %s" % e
+        Clock.schedule_once(lambda d: self.repos(), 1.0 + len(rep) * 0.075)
+
+    def repos(self, msg=None):
+        self.bulle.set_etat("veille")
+        self.etat_lbl.text = "Touche la bulle pour parler"
+        if msg:
+            self.lbl.text = msg
+        self.occupe = False
 
 JinxApp().run()
