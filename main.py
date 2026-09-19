@@ -1,4 +1,4 @@
-import json, threading, re, time, math, random, os, subprocess, ssl
+import json, threading, re, time, math, random, os, subprocess, ssl, unicodedata
 from urllib import request
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
@@ -42,16 +42,184 @@ ETATS = {
     "parle":     (0.50, 0.12, 7.0, (1.00, 0.65, 0.20)),
 }
 
+try:
+    import sqlite3
+except Exception:
+    sqlite3 = None
+
+
 def corriger(t):
     return re.sub(r"\b(jenkins|jinks|gingks|jean x|djinx|ginx|gynx)\b",
                   "Jinx", t, flags=re.I)
 
-def demander_ia(question):
-    data = json.dumps({
-        "messages": [
-            {"role": "system", "content": SYSTEM}] + EXEMPLES + [
-            {"role": "user", "content": question}],
-        "max_tokens": 150, "temperature": 0.3}).encode()
+STOP = set(("le la les un une des de du et ou au aux en dans sur pour par "
+            "avec sans que qui quoi quel quelle est es suis sont ai as avons "
+            "ont mon ma mes ton ta tes son sa ses je tu il elle nous vous ils "
+            "elles me te se ce cet cette ces ne pas plus tres bien alors donc "
+            "mais si comme tout tous fait faire peux peut veux veut dis dit "
+            "jinx hey salut bonjour oui non cela ceci").split())
+CONFIRM = {"oubli": False}
+SYSTEM_BASE = ("Tu es Jinx, une assistante vocale un peu taquine. "
+               "Tu parles français et tu tutoies. Tu réponds en une ou deux phrases courtes. "
+               "Si tu ne sais pas, tu le dis.")
+EXEMPLES_JINX = [
+    {"role": "user", "content": "Qui es-tu ?"},
+    {"role": "assistant", "content": "Moi, c'est Jinx, ton assistante vocale. Un peu chipie, mais toujours là pour toi !"},
+    {"role": "user", "content": "Bonjour"},
+    {"role": "assistant", "content": "Salut toi ! Alors, on a besoin de moi ?"},
+]
+
+
+def norm(s):
+    s = unicodedata.normalize("NFD", s.lower())
+    return "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+
+
+def mots(s):
+    out = set()
+    for w in re.findall(r"[a-z0-9]+", norm(s)):
+        if len(w) < 3 or w in STOP:
+            continue
+        if len(w) > 3 and w[-1] in "sx":
+            w = w[:-1]
+        out.add(w)
+    return out
+
+
+def db(dossier):
+    if sqlite3 is None:
+        return None
+    c = sqlite3.connect(os.path.join(dossier, "jinx.db"), timeout=5)
+    c.execute("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, role TEXT, contenu TEXT)")
+    c.execute("CREATE TABLE IF NOT EXISTS faits (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, contenu TEXT)")
+    return c
+
+
+def enregistrer(dossier, question, reponse):
+    c = db(dossier)
+    if c is None:
+        return
+    try:
+        now = time.time()
+        c.execute("INSERT INTO messages (ts, role, contenu) VALUES (?, 'user', ?)", (now, question))
+        c.execute("INSERT INTO messages (ts, role, contenu) VALUES (?, 'assistant', ?)", (now, reponse))
+        c.commit()
+    finally:
+        c.close()
+
+
+def contexte_memoire(dossier, question):
+    c = db(dossier)
+    if c is None:
+        return "", []
+    try:
+        cle = mots(question)
+        faits = [f[0] for f in c.execute("SELECT contenu FROM faits ORDER BY id DESC LIMIT 200")]
+        notes = faits[:3]
+        classes = sorted(faits, key=lambda x: len(cle & mots(x)), reverse=True)
+        for x in classes[:4]:
+            if len(cle & mots(x)) >= 1 and x not in notes:
+                notes.append(x)
+        rows = c.execute("SELECT id, role, contenu FROM messages ORDER BY id DESC LIMIT 6").fetchall()
+        rows.reverse()
+        hist = [{"role": r[1], "content": r[2][:300]} for r in rows]
+        recents = set(r[0] for r in rows)
+        souvenirs = []
+        if cle:
+            cand = []
+            for mid, txt in c.execute("SELECT id, contenu FROM messages WHERE role='user' ORDER BY id DESC LIMIT 400").fetchall():
+                if mid in recents:
+                    continue
+                sc = len(cle & mots(txt))
+                if sc >= min(2, len(cle)):
+                    cand.append((sc, mid, txt))
+            cand.sort(reverse=True)
+            for sc, mid, txt in cand[:2]:
+                r2 = c.execute("SELECT contenu FROM messages WHERE id=? AND role='assistant'", (mid + 1,)).fetchone()
+                souvenirs.append((txt, r2[0] if r2 else ""))
+    finally:
+        c.close()
+    extra = ""
+    if notes:
+        extra += ("\nVoici ce que l'utilisateur t'a demandé de retenir "
+                  "(ce sont ses propres mots, il parle de lui) :\n"
+                  + "\n".join("- " + n for n in notes))
+    if souvenirs:
+        extra += "\nSouvenirs de conversations passées :\n" + "\n".join(
+            "- Il disait : %s | Tu répondais : %s" % (a[:150], b[:150])
+            for a, b in souvenirs)
+    if extra:
+        extra += "\nUtilise ces informations seulement si elles aident à répondre."
+    return extra, hist
+
+
+def commande_memoire(dossier, texte):
+    c = db(dossier)
+    if c is None:
+        return None
+    try:
+        base = texte.strip().rstrip(" .!?")
+        t = norm(base)
+        if CONFIRM["oubli"]:
+            CONFIRM["oubli"] = False
+            if t.startswith("oui"):
+                c.execute("DELETE FROM faits")
+                c.execute("DELETE FROM messages")
+                c.commit()
+                return "C'est fait, j'ai tout oublié. On repart de zéro."
+            return "D'accord, je garde tout."
+        if re.match(r"(?:jinx[ ,]*)?(?:oublie|efface)\s+(?:tout|ta memoire|toute ta memoire|tes souvenirs|tout ce que tu sais)$", t):
+            CONFIRM["oubli"] = True
+            return "Tu es sûr de vouloir que j'oublie tout ? Dis oui pour confirmer."
+        m = re.match(r"(?:jinx[ ,]*)?(?:retiens|memorise|souviens[- ]toi|rappelle[- ]toi|n.?oublie pas)\s+(?:bien\s+)?(?:que\s+|qu.?)?(.+)$", t)
+        if m:
+            fait = base[m.start(1):].strip()
+            if not fait:
+                return None
+            fait = fait[0].upper() + fait[1:]
+            deja = [f[0] for f in c.execute("SELECT contenu FROM faits")]
+            if any(norm(x) == norm(fait) for x in deja):
+                return "Oui, je le savais déjà."
+            c.execute("INSERT INTO faits (ts, contenu) VALUES (?, ?)", (time.time(), fait[:300]))
+            c.commit()
+            return "C'est noté, je m'en souviendrai."
+        if re.search(r"(qu.?est.?ce que tu (?:sais|retiens)|que sais.?tu|dis.?moi ce que tu (?:sais|retiens)|de quoi tu te souviens)", t):
+            lignes = [f[0] for f in c.execute("SELECT contenu FROM faits ORDER BY id DESC LIMIT 8")]
+            if not lignes:
+                return "Je ne sais encore rien sur toi. Dis-moi retiens que, puis ce que tu veux que je retienne."
+            return "Voici ce que je retiens : " + ". ".join(lignes) + "."
+        m = re.match(r"(?:jinx[ ,]*)?(?:oublie|efface)\s+(?:que\s+|qu.?)?(.+)$", t)
+        if m:
+            cle = mots(m.group(1))
+            if not cle:
+                return "Tu veux que j'oublie quoi exactement ?"
+            seuil = max(1, (len(cle) + 1) // 2)
+            n = 0
+            for fid, txt in c.execute("SELECT id, contenu FROM faits").fetchall():
+                if len(cle & mots(txt)) >= seuil:
+                    c.execute("DELETE FROM faits WHERE id=?", (fid,))
+                    n += 1
+            for mid, txt in c.execute("SELECT id, contenu FROM messages WHERE role='user'").fetchall():
+                if len(cle & mots(txt)) >= seuil:
+                    c.execute("DELETE FROM messages WHERE id=?", (mid,))
+                    c.execute("DELETE FROM messages WHERE id=? AND role='assistant'", (mid + 1,))
+                    n += 1
+            c.commit()
+            if n:
+                return "C'est oublié, j'ai effacé %d souvenir%s." % (n, "s" if n > 1 else "")
+            return "Je ne trouve rien à oublier là-dessus."
+        return None
+    finally:
+        c.close()
+
+
+def demander_ia(question, ctx=("", [])):
+    extra, hist = ctx
+    msgs = ([{"role": "system", "content": SYSTEM_BASE + extra}]
+            + (EXEMPLES_JINX if len(hist) < 2 else [])
+            + hist + [{"role": "user", "content": question}])
+    data = json.dumps({"messages": msgs, "max_tokens": 150,
+                       "temperature": 0.3}).encode()
     req = request.Request(URL, data=data,
                           headers={"Content-Type": "application/json"})
     with request.urlopen(req, timeout=120) as r:
@@ -554,10 +722,27 @@ class JinxApp(App):
                          daemon=True).start()
 
     def penser(self, texte):
+        dossier = self.user_data_dir
+        log = False
         try:
-            rep = demander_ia(texte)
+            rep = commande_memoire(dossier, texte)
         except Exception:
-            rep = "Je n'arrive pas a joindre mon cerveau. Lance le serveur dans Termux."
+            rep = None
+        if rep is None:
+            try:
+                ctx = contexte_memoire(dossier, texte)
+            except Exception:
+                ctx = ("", [])
+            try:
+                rep = demander_ia(texte, ctx)
+                log = True
+            except Exception:
+                rep = "Je n'arrive pas a joindre mon cerveau. Lance le serveur dans Termux."
+        if log:
+            try:
+                enregistrer(dossier, texte, rep)
+            except Exception:
+                pass
         Clock.schedule_once(lambda d: self.repondre(texte, rep))
 
     def repondre(self, texte, rep):
