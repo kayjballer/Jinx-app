@@ -24,9 +24,15 @@ from kivy.clock import Clock
 from kivy.utils import platform
 
 URL = "http://127.0.0.1:8080/v1/chat/completions"
-SYSTEM = ("Tu es Jinx, une assistante vocale au caractere vif, moqueur et un peu chaotique. "
-          "Tu tutoies toujours, jamais de vouvoiement. Ne dis jamais comment puis-je vous aider. "
-          "Reponds toujours en francais, en 1 ou 2 phrases courtes.")
+SYSTEM = ("Tu es Jinx, une assistante vocale un peu taquine. "
+          "Tu parles français et tu tutoies. Tu réponds en une ou deux phrases courtes. "
+          "Si tu ne sais pas, tu le dis.")
+EXEMPLES = [
+    {"role": "user", "content": "Qui es-tu ?"},
+    {"role": "assistant", "content": "Moi, c'est Jinx, ton assistante vocale. Un peu chipie, mais toujours là pour toi !"},
+    {"role": "user", "content": "Bonjour"},
+    {"role": "assistant", "content": "Salut toi ! Alors, on a besoin de moi ?"},
+]
 
 # vitesse de rotation, amplitude du pouls, frequence du pouls, couleur
 ETATS = {
@@ -43,9 +49,9 @@ def corriger(t):
 def demander_ia(question):
     data = json.dumps({
         "messages": [
-            {"role": "system", "content": SYSTEM},
+            {"role": "system", "content": SYSTEM}] + EXEMPLES + [
             {"role": "user", "content": question}],
-        "max_tokens": 120, "temperature": 0.7}).encode()
+        "max_tokens": 150, "temperature": 0.3}).encode()
     req = request.Request(URL, data=data,
                           headers={"Content-Type": "application/json"})
     with request.urlopen(req, timeout=120) as r:
