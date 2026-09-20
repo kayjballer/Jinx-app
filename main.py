@@ -39,7 +39,7 @@ try:
 except Exception:
     CTX = ssl.create_default_context()
 
-VERSION = "0.3"
+VERSION = "0.31"
 URL = "http://127.0.0.1:8080/v1/chat/completions"
 PROC = None
 
@@ -521,3 +521,914 @@ def lancer_cerveau(dossier, statut):
         time.sleep(1)
     statut("Le serveur ne repond pas")
     return False
+
+
+PALETTES = {
+    "or": {"veille": (1.00, 0.70, 0.15), "ecoute": (1.00, 0.86, 0.38),
+           "reflexion": (1.00, 0.52, 0.10), "parle": (1.00, 0.78, 0.22)},
+    "bleu": {"veille": (0.15, 0.65, 1.00), "ecoute": (0.40, 0.85, 1.00),
+             "reflexion": (0.55, 0.40, 1.00), "parle": (0.30, 0.75, 1.00)},
+    "vert": {"veille": (0.15, 0.85, 0.40), "ecoute": (0.45, 1.00, 0.60),
+             "reflexion": (0.70, 0.90, 0.20), "parle": (0.30, 0.95, 0.55)},
+    "rouge": {"veille": (1.00, 0.25, 0.20), "ecoute": (1.00, 0.50, 0.40),
+              "reflexion": (1.00, 0.15, 0.40), "parle": (1.00, 0.40, 0.25)},
+}
+ETATS = {
+    "veille": dict(vit=0.22, amp=0.025, freq=1.1, halo=0.35, hamp=0.10,
+                   onde=0.05, rate=0.25),
+    "ecoute": dict(vit=0.50, amp=0.050, freq=3.0, halo=0.55, hamp=0.20,
+                   onde=0.45, rate=0.50),
+    "reflexion": dict(vit=1.50, amp=0.050, freq=5.0, halo=0.60, hamp=0.30,
+                      onde=0.55, rate=0.90),
+    "parle": dict(vit=0.45, amp=0.080, freq=6.0, halo=0.75, hamp=0.45,
+                  onde=0.70, rate=0.70),
+}
+
+
+def texture_douce(n=64):
+    c = (n - 1) / 2.0
+    buf = bytearray()
+    for y in range(n):
+        for x in range(n):
+            d = math.hypot(x - c, y - c) / c
+            a = max(0.0, 1.0 - d)
+            a = a * a * (3 - 2 * a)
+            buf += bytes((255, 255, 255, int(255 * a)))
+    tex = Texture.create(size=(n, n), colorfmt="rgba")
+    tex.blit_buffer(bytes(buf), colorfmt="rgba", bufferfmt="ubyte")
+    tex.mag_filter = "linear"
+    tex.min_filter = "linear"
+    return tex
+
+
+def quads(m):
+    return [i for q in range(m)
+            for i in (4 * q, 4 * q + 1, 4 * q + 2, 4 * q, 4 * q + 2, 4 * q + 3)]
+
+
+def unit(v):
+    l = math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) or 1.0
+    return (v[0] / l, v[1] / l, v[2] / l)
+
+
+def alea3():
+    return unit([random.gauss(0, 1) for _ in range(3)])
+
+
+class Bulle(Widget):
+    def __init__(self, on_tap, **kw):
+        super().__init__(**kw)
+        self.on_tap = on_tap
+        self.etat = "veille"
+        self.theme = "or"
+        self.halo_mult = 1.0
+        self.t = 0.0
+        self.ay = 0.0
+        self.ax = 0.35
+        self.ph_onde = 0.0
+        self._ev = None
+        self.p = dict(vit=0.22, amp=0.025, halo=0.35, hamp=0.10, onde=0.05,
+                      rate=0.25, r=1.0, g=0.70, b=0.15)
+        random.seed(11)
+        tex = texture_douce()
+        n0 = 150
+        gold = math.pi * (3 - math.sqrt(5))
+        self.pts = []
+        self.tai = []
+        for i in range(n0):
+            y = 1 - 2 * (i + 0.5) / n0
+            r = math.sqrt(1 - y * y)
+            th = gold * i
+            k = random.uniform(0.80, 1.06)
+            self.pts.append((math.cos(th) * r * k, y * k, math.sin(th) * r * k))
+            self.tai.append(random.uniform(0.6, 1.3))
+        for i in range(40):
+            u = alea3()
+            k = random.uniform(1.10, 1.40)
+            self.pts.append((u[0] * k, u[1] * k, u[2] * k))
+            self.tai.append(random.uniform(0.35, 0.70))
+        self.n0 = n0
+        self.n = len(self.pts)
+        self.ph = [random.uniform(0, 6.28) for _ in range(self.n)]
+        idx = []
+        for i in range(n0):
+            for j in range(i + 1, n0):
+                dx = self.pts[i][0] - self.pts[j][0]
+                dy = self.pts[i][1] - self.pts[j][1]
+                dz = self.pts[i][2] - self.pts[j][2]
+                if dx * dx + dy * dy + dz * dz < 0.15:
+                    idx += [i, j]
+        self.bok = []
+        self.bokt = []
+        for i in range(9):
+            u = alea3()
+            k = random.uniform(0.45, 1.15)
+            self.bok.append((u[0] * k, u[1] * k, u[2] * k))
+            self.bokt.append(random.uniform(0.8, 1.6))
+        self.stk = []
+        for i in range(30):
+            u = alea3()
+            k = random.uniform(0.75, 1.30)
+            a = (u[0] * k, u[1] * k, u[2] * k)
+            w = [random.gauss(0, 1) for _ in range(3)]
+            d = w[0] * u[0] + w[1] * u[1] + w[2] * u[2]
+            tg = unit([w[0] - u[0] * d, w[1] - u[1] * d, w[2] - u[2] * d])
+            ln = random.uniform(0.10, 0.28)
+            self.stk.append((a, (a[0] + tg[0] * ln, a[1] + tg[1] * ln,
+                                 a[2] + tg[2] * ln)))
+        self.anneaux = []
+        self.vit_an = (1.0, -0.7, 0.55)
+        for (tx, tz, rr) in ((0.0, 0.0, 1.0), (1.05, 0.5, 1.12),
+                             (-0.8, 1.1, 0.92)):
+            base = []
+            for q in range(72):
+                a = 2 * math.pi * q / 72
+                x, y, z = math.cos(a) * rr, 0.0, math.sin(a) * rr
+                y1 = y * math.cos(tx) - z * math.sin(tx)
+                z1 = y * math.sin(tx) + z * math.cos(tx)
+                x2 = x * math.cos(tz) - y1 * math.sin(tz)
+                y2 = x * math.sin(tz) + y1 * math.cos(tz)
+                base.append((x2, y2, z1))
+            self.anneaux.append(base)
+        ns = len(self.stk)
+        with self.canvas:
+            if Callback:
+                Callback(_additif)
+            self.c_halo = Color(1, 0.7, 0.15, 0.35)
+            self.r_halo = Rectangle(texture=tex, pos=(0, 0), size=(1, 1))
+            self.c_ondes = []
+            self.l_ondes = []
+            for i in range(3):
+                self.c_ondes.append(Color(1, 0.7, 0.15, 0))
+                self.l_ondes.append(Line(circle=(0, 0, 1), width=dp(1.2)))
+            self.c_res = Color(1, 0.7, 0.15, 0.14)
+            self.m_res = Mesh(vertices=[0, 0, 0, 0] * n0, indices=idx,
+                              mode="lines")
+            self.c_an = Color(1, 0.7, 0.15, 0.6)
+            self.l_an = [Line(points=[0, 0, 0, 0], width=dp(1.1))
+                         for _ in self.anneaux]
+            self.c_stk = Color(1, 0.8, 0.3, 0.6)
+            self.m_stk = Mesh(vertices=[0, 0, 0, 0] * (2 * ns),
+                              indices=list(range(2 * ns)), mode="lines")
+            self.c_bok = Color(1, 0.7, 0.15, 0.12)
+            self.m_bok = Mesh(vertices=[0, 0, 0, 0] * 36, indices=quads(9),
+                              mode="triangles", texture=tex)
+            self.c_p = Color(1, 0.9, 0.5, 0.95)
+            self.m_p = Mesh(vertices=[0, 0, 0, 0] * (4 * self.n),
+                            indices=quads(self.n), mode="triangles",
+                            texture=tex)
+            self.c_noy = Color(1, 0.9, 0.5, 0.6)
+            self.r_noy = Rectangle(texture=tex, pos=(0, 0), size=(1, 1))
+            self.c_arcs = Color(1, 0.9, 0.5, 0.85)
+            self.l_arcs = [Line(circle=(0, 0, 1, 0, 90), width=dp(1.4))
+                           for _ in range(3)]
+            if Callback:
+                Callback(_normal)
+        self.set_fps(30)
+
+    def set_fps(self, fps):
+        if self._ev is not None:
+            self._ev.cancel()
+        self._ev = Clock.schedule_interval(self.maj, 1.0 / fps)
+
+    def set_etat(self, e):
+        self.etat = e
+
+    def rayon(self):
+        return min(self.width, self.height) * 0.36
+
+    def maj(self, dt):
+        self.t += dt
+        t = self.t
+        e = ETATS[self.etat]
+        p = self.p
+        k = min(1.0, dt * 3)
+        for c in ("vit", "amp", "halo", "hamp", "onde", "rate"):
+            p[c] += (e[c] - p[c]) * k
+        pal = PALETTES.get(self.theme, PALETTES["or"])
+        for c, v in zip("rgb", pal[self.etat]):
+            p[c] += (v - p[c]) * k
+        r, g, b = p["r"], p["g"], p["b"]
+        hm = self.halo_mult
+        self.ay += p["vit"] * dt
+        self.ph_onde += p["rate"] * dt
+        cx, cy = self.center_x, self.center_y
+        base = self.rayon()
+        if self.etat == "parle":
+            env = abs(math.sin(t * 7.3) * math.sin(t * 3.1 + 1.0) * 0.6
+                      + math.sin(t * 11.7) * 0.4) * 1.4
+            env = min(1.0, env)
+        else:
+            env = 0.5 + 0.5 * math.sin(t * e["freq"])
+        R = base * (1 + p["amp"] * (2 * env - 1))
+        hs = base * (2.4 + 2.2 * p["hamp"] * env)
+        self.c_halo.rgba = (r, g * 0.92, b * 0.85,
+                            min(1.0, p["halo"] * hm * (0.55 + 0.45 * env)))
+        self.r_halo.pos = (cx - hs, cy - hs)
+        self.r_halo.size = (2 * hs, 2 * hs)
+        for i in range(3):
+            ph = (self.ph_onde + i / 3.0) % 1.0
+            self.c_ondes[i].rgba = (r, g, b, min(1.0, p["onde"] * hm * (1 - ph) ** 1.6))
+            self.l_ondes[i].circle = (cx, cy, R * (1.05 + 1.1 * ph))
+        cay, say = math.cos(self.ay), math.sin(self.ay)
+        cax, sax = math.cos(self.ax), math.sin(self.ax)
+
+        def proj(x, y, z):
+            x1 = x * cay + z * say
+            z1 = -x * say + z * cay
+            y2 = y * cax - z1 * sax
+            z2 = y * sax + z1 * cax
+            s = 1 + z2 * 0.2
+            return cx + x1 * R * s, cy + y2 * R * s, z2
+
+        u1 = dp(6)
+        vs = []
+        res = []
+        for i in range(self.n):
+            x, y, z = self.pts[i]
+            px, py, z2 = proj(x, y, z)
+            h = (u1 * self.tai[i] * max(0.3, 0.7 + 0.35 * z2)
+                 * (0.85 + 0.15 * math.sin(t * 2.5 + self.ph[i])))
+            vs += [px - h, py - h, 0, 0, px + h, py - h, 1, 0,
+                   px + h, py + h, 1, 1, px - h, py + h, 0, 1]
+            if i < self.n0:
+                res += [px, py, 0, 0]
+        self.m_p.vertices = vs
+        self.m_res.vertices = res
+        bv = []
+        for i in range(9):
+            x, y, z = self.bok[i]
+            px, py, z2 = proj(x, y, z)
+            h = R * 0.08 * self.bokt[i]
+            bv += [px - h, py - h, 0, 0, px + h, py - h, 1, 0,
+                   px + h, py + h, 1, 1, px - h, py + h, 0, 1]
+        self.m_bok.vertices = bv
+        sv = []
+        for (pa, pb) in self.stk:
+            ax_, ay_, _ = proj(*pa)
+            bx_, by_, _ = proj(*pb)
+            sv += [ax_, ay_, 0, 0, bx_, by_, 0, 0]
+        self.m_stk.vertices = sv
+        for j in range(3):
+            pts = self.anneaux[j]
+            st = int(t * self.vit_an[j] * 12) % 72
+            lst = []
+            for q in range(46):
+                x, y, z = pts[(st + q) % 72]
+                px, py, _ = proj(x, y, z)
+                lst += [px, py]
+            self.l_an[j].points = lst
+        self.c_res.rgba = (r, g, b, 0.14)
+        self.c_an.rgba = (r, g, b, 0.6)
+        self.c_stk.rgba = (r, min(1, g + 0.12), min(1, b + 0.15),
+                           0.3 + 0.35 * (0.5 + 0.5 * math.sin(t * 9)))
+        self.c_bok.rgba = (r, g * 0.9, b, 0.10 + 0.06 * env)
+        self.c_p.rgba = (min(1, r + 0.05), min(1, g + 0.15),
+                         min(1, b + 0.3), 0.95)
+        ch = R * (0.32 + 0.10 * env)
+        self.c_noy.rgba = (min(1, r + 0.05), min(1, g + 0.2),
+                           min(1, b + 0.35), 0.5 + 0.4 * env)
+        self.r_noy.pos = (cx - ch, cy - ch)
+        self.r_noy.size = (2 * ch, 2 * ch)
+        self.c_arcs.rgba = (min(1, r + 0.05), min(1, g + 0.2),
+                            min(1, b + 0.35), 0.85)
+        for j, (rad, span, sp_) in enumerate(((0.10, 250, 1.0),
+                                              (0.17, 200, -1.4),
+                                              (0.25, 300, 0.7))):
+            a0 = (t * sp_ * 60 * (1 + p["vit"])) % 360
+            self.l_arcs[j].circle = (cx, cy, R * rad, a0, a0 + span)
+
+    def on_touch_down(self, touch):
+        dx = touch.x - self.center_x
+        dy = touch.y - self.center_y
+        if dx * dx + dy * dy < (self.rayon() * 1.3) ** 2:
+            self.on_tap()
+            return True
+        return super().on_touch_down(touch)
+
+
+class BoutonPoints(Widget):
+    def __init__(self, action, **kw):
+        super().__init__(**kw)
+        self.action = action
+        self.couleur = (1, 0.75, 0.25, 0.9)
+        self.bind(pos=self.dessiner, size=self.dessiner)
+        self.dessiner()
+
+    def dessiner(self, *a):
+        self.canvas.clear()
+        cx, cy = self.center_x, self.center_y
+        r = dp(4)
+        with self.canvas:
+            Color(*self.couleur)
+            for k in (-1, 0, 1):
+                Ellipse(pos=(cx - r, cy + k * dp(13) - r), size=(2 * r, 2 * r))
+
+    def on_touch_down(self, touch):
+        if self.collide_point(*touch.pos):
+            self.action()
+            return True
+        return super().on_touch_down(touch)
+
+
+def marges_systeme():
+    if platform != "android":
+        return 0, 0
+    try:
+        from jnius import autoclass
+        act = autoclass("org.kivy.android.PythonActivity").mActivity
+        try:
+            ins = act.getWindow().getDecorView().getRootWindowInsets()
+            haut = ins.getSystemWindowInsetTop()
+            bas = ins.getSystemWindowInsetBottom()
+        except Exception:
+            res = act.getResources()
+            i1 = res.getIdentifier("status_bar_height", "dimen", "android")
+            i2 = res.getIdentifier("navigation_bar_height", "dimen", "android")
+            haut = res.getDimensionPixelSize(i1) if i1 > 0 else 0
+            bas = res.getDimensionPixelSize(i2) if i2 > 0 else 0
+        Point = autoclass("android.graphics.Point")
+        p = Point()
+        act.getWindowManager().getDefaultDisplay().getRealSize(p)
+        if Window.height >= p.y - 4:
+            return int(haut), int(bas)
+        return 0, 0
+    except Exception:
+        return 0, 0
+
+
+class JinxApp(App):
+    def build(self):
+        Window.clearcolor = (0.02, 0.015, 0.01, 1)
+        try:
+            charger_reglages(self.user_data_dir)
+        except Exception:
+            pass
+        self.occupe = False
+        self.pret = False
+        self.col = col = BoxLayout(orientation="vertical", padding=dp(12),
+                                   spacing=dp(6))
+        self.titre = Label(text="J.I.N.X", font_size="22sp", bold=True,
+                           color=(1, 0.75, 0.25, 1), size_hint=(1, .07))
+        self.titre.bind(on_touch_down=self.touche_titre)
+        self.bulle = Bulle(self.ecouter, size_hint=(1, .56))
+        self.etat_lbl = Label(text="Touche la bulle pour parler",
+                              font_size="14sp", color=(0.85, 0.65, 0.30, 1),
+                              size_hint=(1, .07))
+        self.lbl = Label(text="", font_size="18sp", halign="center",
+                         valign="top", size_hint=(1, .30))
+        self.lbl.bind(size=lambda w, s: setattr(w, "text_size", s))
+        self.lbl.color = (1, 0.93, 0.78, 1)
+        for w in (self.titre, self.bulle, self.etat_lbl, self.lbl):
+            col.add_widget(w)
+        fl = FloatLayout()
+        fl.add_widget(col)
+        self.points = BoutonPoints(self.ouvrir_reglages, size_hint=(None, None),
+                                   size=(dp(72), dp(72)),
+                                   pos_hint={"right": 1, "y": 0.02})
+        fl.add_widget(self.points)
+        self.appliquer_reglages()
+        return fl
+
+    def appliquer_reglages(self):
+        pal = PALETTES.get(SET["theme"], PALETTES["or"])
+        r, g, b = pal["veille"]
+        self.bulle.theme = SET["theme"]
+        self.bulle.halo_mult = float(SET["halo"])
+        self.bulle.set_fps(15 if SET["eco"] else 30)
+        self.titre.color = (r, g, b, 1)
+        self.etat_lbl.color = (r * 0.9, g * 0.9, b * 0.7, 1)
+        self.points.couleur = (r, g, b, 0.9)
+        self.points.dessiner()
+        self.lbl.font_size = sp(int(SET["texte"]))
+
+    def on_start(self):
+        if platform == "android":
+            from android.permissions import request_permissions, Permission
+            request_permissions([Permission.RECORD_AUDIO])
+            try:
+                tts_java()
+            except Exception:
+                pass
+        self.demarrer_cerveau()
+        Clock.schedule_once(self.ajuster_marges, 0.6)
+        Window.bind(size=lambda *a: Clock.schedule_once(self.ajuster_marges, 0.3))
+
+    def touche_titre(self, w, touch):
+        if w.collide_point(*touch.pos):
+            self.ouvrir_reglages()
+            return True
+        return False
+
+    def ajuster_marges(self, *a):
+        haut, bas = marges_systeme()
+        self.col.padding = [dp(12), dp(12) + haut, dp(12), dp(12) + bas]
+        self.points.pos_hint = {"right": 1}
+        self.points.y = bas + dp(16)
+
+    def on_stop(self):
+        if PROC is not None:
+            try:
+                PROC.terminate()
+            except Exception:
+                pass
+
+    def demarrer_cerveau(self, avant=None):
+        self.occupe = True
+        self.pret = False
+        self.bulle.set_etat("reflexion")
+        self.etat_lbl.text = "Preparation du cerveau..."
+        self.lbl.text = ""
+
+        def statut(t):
+            Clock.schedule_once(lambda d: setattr(self.lbl, "text", t))
+
+        def tache():
+            try:
+                if avant:
+                    avant()
+                ok = lancer_cerveau(self.user_data_dir, statut)
+            except Exception as e:
+                ok = False
+                statut("Erreur cerveau : %s" % e)
+            Clock.schedule_once(lambda d: self.cerveau_pret(ok))
+        threading.Thread(target=tache, daemon=True).start()
+
+    def cerveau_pret(self, ok):
+        self.pret = ok
+        self.occupe = False
+        self.bulle.set_etat("veille")
+        if ok:
+            self.lbl.text = ""
+            self.etat_lbl.text = "Touche la bulle pour parler"
+        else:
+            self.etat_lbl.text = "Touche la bulle pour reessayer"
+
+    def ecouter(self):
+        if self.occupe:
+            return
+        if not self.pret:
+            self.demarrer_cerveau()
+            return
+        self.occupe = True
+        self.bulle.set_etat("ecoute")
+        self.etat_lbl.text = "J'ecoute..."
+        self.lbl.text = ""
+        try:
+            from plyer import stt
+            stt.results = []
+            stt.errors = []
+            stt.partial_results = []
+            stt.language = SET["langue"]
+            stt.start()
+            self.t0 = time.time()
+            self.tchange = self.t0
+            self.sig = None
+            Clock.schedule_interval(self.surveiller, 0.3)
+        except Exception as e:
+            self.repos("Erreur STT: %s" % e)
+
+    def texte_courant(self, stt):
+        part = getattr(stt, "partial_results", None) or []
+        if stt.results:
+            return stt.results[-1]
+        if part:
+            return part[-1]
+        return ""
+
+    def surveiller(self, dt):
+        from plyer import stt
+        now = time.time()
+        texte = self.texte_courant(stt)
+        sig = (len(stt.results), texte)
+        if sig != self.sig:
+            self.sig = sig
+            self.tchange = now
+            if texte:
+                self.lbl.text = texte
+        fini = False
+        if texte and now - self.tchange > float(SET["silence"]):
+            fini = True
+        elif not texte and (stt.errors or now - self.t0 > 7):
+            fini = True
+        elif now - self.t0 > 14:
+            fini = True
+        if not fini:
+            return
+        Clock.unschedule(self.surveiller)
+        erreurs = stt.errors
+        try:
+            stt.stop()
+        except Exception:
+            pass
+        texte = corriger(texte).strip()
+        if not texte:
+            self.repos("Rien compris %s" % (erreurs,))
+            return
+        self.envoyer(texte)
+
+    def envoyer(self, texte):
+        self.bulle.set_etat("reflexion")
+        self.etat_lbl.text = "Je reflechis..."
+        self.lbl.text = "Toi : %s" % texte
+        threading.Thread(target=self.penser, args=(texte,),
+                         daemon=True).start()
+
+    def penser(self, texte):
+        dossier = self.user_data_dir
+        log = False
+        try:
+            rep = commande_memoire(dossier, texte)
+        except Exception:
+            rep = None
+        if rep is None:
+            try:
+                ctx = contexte_memoire(dossier, texte)
+            except Exception:
+                ctx = ("", [])
+            try:
+                rep = demander_ia(texte, ctx)
+                log = SET["historique"]
+            except Exception:
+                rep = "Je n'arrive pas a joindre mon cerveau. Ouvre les parametres, les trois points en bas, pour le redemarrer."
+        if log:
+            try:
+                enregistrer(dossier, texte, rep)
+            except Exception:
+                pass
+        Clock.schedule_once(lambda d: self.repondre(texte, rep))
+
+    def repondre(self, texte, rep):
+        self.bulle.set_etat("parle")
+        self.etat_lbl.text = "Jinx parle..."
+        self.lbl.text = "Toi : %s\n\nJinx : %s" % (texte, rep)
+        parler_texte(rep)
+        if SET["voix_active"]:
+            delai = 1.0 + len(rep) * 0.075 / max(0.5, float(SET["vitesse"]))
+        else:
+            delai = 0.8
+        Clock.schedule_once(lambda d: self.repos(), delai)
+
+    def repos(self, msg=None):
+        self.bulle.set_etat("veille")
+        self.etat_lbl.text = "Touche la bulle pour parler"
+        if msg:
+            self.lbl.text = msg
+        self.occupe = False
+
+    # ------------------------------------------------------------ paramètres
+    def ouvrir_reglages(self):
+        try:
+            self.panneau()
+        except Exception as e:
+            self.lbl.text = "Erreur parametres : %s" % e
+
+    def panneau(self):
+        pal = PALETTES.get(SET["theme"], PALETTES["or"])
+        r, g, b = pal["veille"]
+        OR = (r, g, b, 1)
+        BL = (1, 0.93, 0.78, 1)
+        ON = (r * 0.6, g * 0.6, b * 0.2, 1)
+        OFF = (0.22, 0.22, 0.22, 1)
+        BT = (0.28, 0.21, 0.07, 1)
+        dossier = self.user_data_dir
+
+        def sauver():
+            sauver_reglages(dossier)
+
+        mv = ModalView(size_hint=(0.94, 0.84), background="",
+                       background_color=(0.04, 0.03, 0.02, 0.98),
+                       auto_dismiss=True)
+        col = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(6))
+        liste = BoxLayout(orientation="vertical", size_hint_y=None,
+                          spacing=dp(6), padding=(0, dp(4)))
+        liste.bind(minimum_height=liste.setter("height"))
+
+        def mk(texte, action=None, coul=BT, largeur=None):
+            bt = Button(text=texte, background_normal="", background_color=coul,
+                        color=BL, font_size="14sp")
+            if largeur:
+                bt.size_hint_x = None
+                bt.width = largeur
+            if action:
+                bt.bind(on_release=lambda *a: action())
+            return bt
+
+        def section(t):
+            l = Label(text=t, color=OR, bold=True, font_size="16sp",
+                      size_hint_y=None, height=dp(36), halign="left",
+                      valign="middle")
+            l.bind(size=lambda w, s: setattr(w, "text_size", s))
+            liste.add_widget(l)
+
+        def note(texte, hauteur=34):
+            l = Label(text=texte, color=BL, font_size="13sp",
+                      size_hint_y=None, height=dp(hauteur), halign="left",
+                      valign="middle")
+            l.bind(size=lambda w, s: setattr(w, "text_size", s))
+            liste.add_widget(l)
+            return l
+
+        def ligne(texte, widget, hauteur=48):
+            row = BoxLayout(size_hint_y=None, height=dp(hauteur), spacing=dp(8))
+            lab = Label(text=texte, color=BL, font_size="14sp", halign="left",
+                        valign="middle", size_hint_x=.5)
+            lab.bind(size=lambda w, s: setattr(w, "text_size", s))
+            row.add_widget(lab)
+            row.add_widget(widget)
+            liste.add_widget(row)
+
+        def pleine(texte, action):
+            bt = mk(texte, action)
+            bt.size_hint_y = None
+            bt.height = dp(44)
+            liste.add_widget(bt)
+
+        def interrupteur(texte, cle, apres=None):
+            bt = mk("OUI" if SET[cle] else "NON",
+                    coul=ON if SET[cle] else OFF)
+
+            def basculer(*a):
+                SET[cle] = not SET[cle]
+                bt.text = "OUI" if SET[cle] else "NON"
+                bt.background_color = ON if SET[cle] else OFF
+                sauver()
+                if apres:
+                    apres()
+            bt.bind(on_release=basculer)
+            ligne(texte, bt)
+
+        def choix(texte, cle, options, etiquettes=None, apres=None):
+            def lab(v):
+                return (etiquettes or {}).get(v, str(v))
+            bt = mk(lab(SET[cle]))
+
+            def suivant(*a):
+                try:
+                    i = options.index(SET[cle])
+                except ValueError:
+                    i = -1
+                SET[cle] = options[(i + 1) % len(options)]
+                bt.text = lab(SET[cle])
+                sauver()
+                if apres:
+                    apres()
+            bt.bind(on_release=suivant)
+            ligne(texte, bt)
+
+        def curseur(texte, cle, mini, maxi, pas, fmt, apres=None, entier=False):
+            box = BoxLayout(orientation="vertical")
+            val = Label(text=fmt(SET[cle]), color=OR, font_size="13sp",
+                        size_hint_y=.4)
+            sl = Slider(min=mini, max=maxi, value=float(SET[cle]), step=pas,
+                        value_track=True, value_track_color=OR, size_hint_y=.6)
+
+            def change(inst, v):
+                SET[cle] = int(round(v)) if entier else round(float(v), 2)
+                val.text = fmt(SET[cle])
+
+            def fin(*a):
+                sauver()
+                if apres:
+                    apres()
+            sl.bind(value=change, on_touch_up=fin)
+            box.add_widget(val)
+            box.add_widget(sl)
+            ligne(texte, box, 62)
+
+        haut = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        haut.add_widget(Label(text="Paramètres", bold=True, font_size="20sp",
+                              color=OR))
+        haut.add_widget(mk("Fermer", mv.dismiss, largeur=dp(90)))
+        col.add_widget(haut)
+        sv = ScrollView(do_scroll_x=False)
+        sv.add_widget(liste)
+        col.add_widget(sv)
+        mv.add_widget(col)
+
+        section("Voix et écoute")
+        curseur("Délai de silence", "silence", 0.8, 3.0, 0.1,
+                lambda v: "%.1f s" % v)
+        choix("Langue d'écoute", "langue", ["fr-FR", "en-US"],
+              {"fr-FR": "Français", "en-US": "English"})
+        interrupteur("Réponses à voix haute", "voix_active")
+        curseur("Vitesse de la voix", "vitesse", 0.6, 1.6, 0.1,
+                lambda v: "%.1fx" % v)
+        curseur("Hauteur de la voix", "hauteur", 0.6, 1.5, 0.1,
+                lambda v: "%.1fx" % v)
+        voix = [""] + voix_disponibles()
+        if SET["voix_nom"] not in voix:
+            voix.append(SET["voix_nom"])
+        choix("Voix Android", "voix_nom", voix, {"": "Par défaut"})
+        pleine("Tester la voix",
+               lambda: parler_texte("Salut, c'est Jinx. Comment ça va ?", True))
+
+        section("Intelligence")
+        choix("Personnalité", "perso", ["taquine", "serieuse", "pro", "coach"],
+              {"taquine": "Taquine", "serieuse": "Sérieuse",
+               "pro": "Professionnelle", "coach": "Coach"})
+        choix("Longueur des réponses", "longueur",
+              ["courtes", "moyennes", "longues"],
+              {"courtes": "Courtes", "moyennes": "Moyennes",
+               "longues": "Longues"})
+        curseur("Créativité", "creativite", 0.0, 1.0, 0.05,
+                lambda v: "%d %%" % round(v * 100))
+        ti = TextInput(text=SET["surnom"], multiline=False,
+                       hint_text="ex : Jacques",
+                       background_color=(0.12, 0.10, 0.05, 1),
+                       foreground_color=BL, cursor_color=OR,
+                       hint_text_color=(0.5, 0.45, 0.35, 1),
+                       padding=(dp(8), dp(12)))
+
+        def nom_change(inst, v):
+            SET["surnom"] = v.strip()[:30]
+            sauver()
+        ti.bind(text=nom_change)
+        ligne("Comment t'appeler", ti)
+        choix("Modèle IA (puis redémarrer le cerveau)", "modele",
+              ["1.5B", "3B"],
+              {"1.5B": "1,5B rapide", "3B": "3B plus fin"})
+
+        section("Mémoire")
+        interrupteur("Utiliser la mémoire", "memoire")
+        interrupteur("Enregistrer l'historique", "historique")
+        pleine("Voir mes souvenirs", self.voir_souvenirs)
+        pleine("Tout effacer (souvenirs et historique)",
+               lambda: self.confirmer("Tout effacer ?\nSouvenirs et historique.",
+                                      self.efface_tout))
+        pleine("Sauvegarder (partager en texte)", self.partager_base)
+
+        section("Apparence")
+        choix("Couleur du thème", "theme", ["or", "bleu", "vert", "rouge"],
+              {"or": "Or", "bleu": "Bleu", "vert": "Vert", "rouge": "Rouge"},
+              apres=self.appliquer_reglages)
+        curseur("Intensité du halo", "halo", 0.3, 1.5, 0.1,
+                lambda v: "%d %%" % round(v * 100),
+                apres=self.appliquer_reglages)
+        interrupteur("Économie d'énergie", "eco", self.appliquer_reglages)
+        curseur("Taille du texte", "texte", 14, 26, 1, lambda v: "%d" % v,
+                apres=self.appliquer_reglages, entier=True)
+
+        section("Système")
+        etat = "prêt" if serveur_pret() else "arrêté"
+        note("Cerveau : %s (modèle %s)" % (etat, SET["modele"]))
+        pleine("Redémarrer le cerveau",
+               lambda: (mv.dismiss(),
+                        self.demarrer_cerveau(avant=arreter_cerveau)))
+        pleine("Journal du serveur", self.voir_journal)
+        note(espace_txt(dossier), 50)
+        pleine("Supprimer le modèle inutilisé",
+               lambda: self.confirmer("Supprimer le modèle que tu n'utilises pas ?",
+                                      self.supprimer_inutilises))
+        pleine("Retélécharger le modèle actuel",
+               lambda: self.confirmer("Supprimer puis retélécharger le modèle actuel ?",
+                                      lambda: (mv.dismiss(), self.retelecharger())))
+        note("Jinx version %s · marges %s" % (VERSION, marges_systeme()))
+        mv.open()
+
+    def confirmer(self, message, action):
+        contenu = BoxLayout(orientation="vertical", spacing=dp(10),
+                            padding=dp(10))
+        lab = Label(text=message, halign="center", valign="middle")
+        lab.bind(size=lambda w, s: setattr(w, "text_size", s))
+        contenu.add_widget(lab)
+        rangee = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(10))
+        pop = Popup(title="Confirmer", content=contenu, size_hint=(.85, .38))
+        non = Button(text="Non")
+        oui = Button(text="Oui")
+        non.bind(on_release=lambda *a: pop.dismiss())
+        oui.bind(on_release=lambda *a: (pop.dismiss(), action()))
+        rangee.add_widget(non)
+        rangee.add_widget(oui)
+        contenu.add_widget(rangee)
+        pop.open()
+
+    def popup_texte(self, titre, texte):
+        sv = ScrollView(do_scroll_x=False)
+        lab = Label(text=texte, font_size="11sp", size_hint_y=None,
+                    halign="left", valign="top")
+        lab.bind(width=lambda w, v: setattr(w, "text_size", (v, None)))
+        lab.bind(texture_size=lambda w, s: setattr(w, "height", s[1]))
+        sv.add_widget(lab)
+        Popup(title=titre, content=sv, size_hint=(.94, .8)).open()
+
+    def voir_journal(self):
+        chemin = os.path.join(self.user_data_dir, "serveur.log")
+        try:
+            with open(chemin, encoding="utf-8", errors="replace") as f:
+                txt = f.read()[-3000:]
+        except Exception as e:
+            txt = "Pas de journal : %s" % e
+        self.popup_texte("Journal du serveur", txt or "(vide)")
+
+    def voir_souvenirs(self):
+        dossier = self.user_data_dir
+        contenu = BoxLayout(orientation="vertical", spacing=dp(6))
+        sv = ScrollView(do_scroll_x=False)
+        lst = BoxLayout(orientation="vertical", size_hint_y=None,
+                        spacing=dp(6))
+        lst.bind(minimum_height=lst.setter("height"))
+        sv.add_widget(lst)
+        contenu.add_widget(sv)
+        pop = Popup(title="Mes souvenirs", content=contenu, size_hint=(.94, .8))
+        fermer = Button(text="Fermer", size_hint_y=None, height=dp(44))
+        fermer.bind(on_release=lambda *a: pop.dismiss())
+        contenu.add_widget(fermer)
+
+        def supprimer(fid):
+            c = db(dossier)
+            if c is None:
+                return
+            try:
+                c.execute("DELETE FROM faits WHERE id=?", (fid,))
+                c.commit()
+            finally:
+                c.close()
+            remplir()
+
+        def remplir():
+            lst.clear_widgets()
+            c = db(dossier)
+            if c is None:
+                lst.add_widget(Label(text="Base indisponible",
+                                     size_hint_y=None, height=dp(40)))
+                return
+            try:
+                faits = c.execute("SELECT id, contenu FROM faits ORDER BY id DESC LIMIT 100").fetchall()
+                nb = c.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+            finally:
+                c.close()
+            lst.add_widget(Label(
+                text="%d souvenir(s) · %d message(s) enregistré(s)" % (len(faits), nb),
+                size_hint_y=None, height=dp(34)))
+            for fid, txt in faits:
+                row = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(6))
+                lab = Label(text=en_tu(txt), halign="left", valign="middle")
+                lab.bind(size=lambda w, s: setattr(w, "text_size", s))
+                bt = Button(text="X", size_hint_x=None, width=dp(44))
+                bt.bind(on_release=lambda inst, fid=fid: supprimer(fid))
+                row.add_widget(lab)
+                row.add_widget(bt)
+                lst.add_widget(row)
+        remplir()
+        pop.open()
+
+    def efface_tout(self):
+        c = db(self.user_data_dir)
+        if c is None:
+            return
+        try:
+            c.execute("DELETE FROM faits")
+            c.execute("DELETE FROM messages")
+            c.commit()
+        finally:
+            c.close()
+        self.lbl.text = "Mémoire effacée."
+
+    def partager_base(self):
+        c = db(self.user_data_dir)
+        if c is None:
+            return
+        try:
+            faits = [f[0] for f in c.execute("SELECT contenu FROM faits ORDER BY id")]
+            msgs = c.execute("SELECT ts, role, contenu FROM messages ORDER BY id DESC LIMIT 300").fetchall()
+        finally:
+            c.close()
+        msgs.reverse()
+        txt = ("JINX - sauvegarde\n\nSOUVENIRS\n"
+               + "\n".join("- " + f for f in faits)
+               + "\n\nHISTORIQUE\n"
+               + "\n".join("%s [%s] %s" % (
+                   time.strftime("%d/%m %H:%M", time.localtime(t)), rl, x)
+                   for t, rl, x in msgs))[:200000]
+        if platform == "android":
+            try:
+                from jnius import autoclass, cast
+                Intent = autoclass("android.content.Intent")
+                String = autoclass("java.lang.String")
+                act = autoclass("org.kivy.android.PythonActivity").mActivity
+                it = Intent(Intent.ACTION_SEND)
+                it.setType("text/plain")
+                it.putExtra(Intent.EXTRA_TEXT,
+                            cast("java.lang.CharSequence", String(txt)))
+                act.startActivity(Intent.createChooser(
+                    it, cast("java.lang.CharSequence", String("Sauvegarder Jinx"))))
+            except Exception as e:
+                self.lbl.text = "Partage impossible : %s" % e
+
+    def supprimer_inutilises(self):
+        for k in MODELES:
+            if k != SET["modele"]:
+                supprimer_modele(self.user_data_dir, k)
+        self.lbl.text = "Modèle inutilisé supprimé."
+
+    def retelecharger(self):
+        d = self.user_data_dir
+
+        def avant():
+            arreter_cerveau()
+            supprimer_modele(d, SET["modele"])
+        self.demarrer_cerveau(avant=avant)
+
+
+JinxApp().run()
