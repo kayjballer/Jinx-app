@@ -57,6 +57,7 @@ jobs:
           cmake --build /tmp/llama-build --target llama-server -j4
           mkdir -p libs/arm64-v8a
           cp /tmp/llama-build/bin/llama-server libs/arm64-v8a/libllama_server.so
+        chmod +x libs/arm64-v8a/libllama_server.so
           ls -lh libs/arm64-v8a
       - name: Build with buildozer
         run: yes | buildozer -v android debug

@@ -8,7 +8,7 @@ CATALOG = {
         "taille_mo": 400, "sha256": "", "port": 8091},
     "math": {
         "nom": "Qwen2.5-Math-1.5B-Instruct",
-        "url": f"{_HF}/Qwen/Qwen2.5-Math-1.5B-Instruct-GGUF/resolve/main/qwen2.5-math-1.5b-instruct-q4_k_m.gguf",
+        "url": f"{_HF}/bartowski/Qwen2.5-Math-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-Math-1.5B-Instruct-Q4_K_M.gguf",
         "taille_mo": 1100, "sha256": "", "port": 8092},
     "dictionnaire": {
         "nom": "Qwen2.5-1.5B-Instruct",
@@ -20,7 +20,7 @@ CATALOG = {
         "taille_mo": 400, "sha256": "", "port": 8094},
     "code": {
         "nom": "Qwen2.5-Coder-3B-Instruct",
-        "url": f"{_HF}/Qwen/Qwen2.5-Coder-3B-Instruct-GGUF/resolve/main/qwen2.5-coder-3b-instruct-q4_k_m.gguf",
+        "url": f"{_HF}/bartowski/Qwen2.5-Coder-3B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf",
         "taille_mo": 2000, "sha256": "", "port": 8095},
     "echo": {
         "nom": "Qwen2.5-3B-Instruct",
