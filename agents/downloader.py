@@ -29,13 +29,29 @@ class ModelDownloader:
     def chemin(self, nom: str) -> str:
         return os.path.join(self.dossier, f"{nom}.gguf")
 
+    def _marqueur(self, nom: str) -> str:
+        return self.chemin(nom) + ".done"
+
     def est_present(self, nom: str) -> bool:
+        """Vrai si le modèle a été téléchargé ET marqué .done."""
+        # 1) Marqueur .done (source de vérité)
+        if os.path.exists(self._marqueur(nom)):
+            return True
+        # 2) Compat : fichier .gguf > 100 Mo et pas de .part en cours
         p = self.chemin(nom)
         if not os.path.exists(p):
             return False
-        attendu_mo = CATALOG[nom]["taille_mo"]
+        if os.path.exists(p + ".part"):
+            return False
+        # Si gros fichier, on considère OK et on marque
         taille_mo = os.path.getsize(p) / (1024 * 1024)
-        return taille_mo >= attendu_mo * 0.95
+        if taille_mo > 100:
+            try:
+                open(self._marqueur(nom), "w").close()
+            except Exception:
+                pass
+            return True
+        return False
 
     def manquants(self) -> list:
         return [n for n in CATALOG if not self.est_present(n)]
@@ -96,6 +112,11 @@ class ModelDownloader:
                 return False
 
         os.rename(part, dest)
+        # Marqueur .done
+        try:
+            open(dest + ".done", "w").close()
+        except Exception:
+            pass
         return True
 
     def telecharger_tout(self, on_progress=None, stop_flag=None) -> bool:
