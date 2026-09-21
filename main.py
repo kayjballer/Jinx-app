@@ -39,7 +39,9 @@ try:
 except Exception:
     CTX = ssl.create_default_context()
 
-from agents.director import build_default_director
+
+from agents import build_default_director, ModelManager, ModelDownloader
+from agents.splash import afficher_splash_dl
 from agents.panel import ouvrir_panneau_agents
 
 VERSION = "0.31"
@@ -914,8 +916,46 @@ class JinxApp(App):
             except Exception:
                 pass
         self.demarrer_cerveau()
+        Clock.schedule_once(self._init_modeles, 2.0)
         Clock.schedule_once(self.ajuster_marges, 0.6)
         Window.bind(size=lambda *a: Clock.schedule_once(self.ajuster_marges, 0.3))
+
+
+    # --------------------------------------------------------- modeles IA
+    def _init_modeles(self, *a):
+        dossier = self.user_data_dir
+        dossier_models = os.path.join(dossier, "models")
+        self.downloader = ModelDownloader(dossier_models)
+        manquants = self.downloader.manquants()
+
+        if manquants:
+            self.lbl.text = ("Premier lancement : telechargement de %d "
+                             "modele(s) IA..." % len(manquants))
+            afficher_splash_dl(
+                self.downloader,
+                on_done=self._modeles_prets,
+                on_error=lambda: setattr(
+                    self.lbl, "text",
+                    "Telechargement incomplet. Relance Jinx pour reprendre."),
+            )
+        else:
+            self._modeles_prets()
+
+    def _modeles_prets(self, *a):
+        dossier = self.user_data_dir
+        dossier_models = os.path.join(dossier, "models")
+        llama_binaire = os.path.join(dossier, "llama-server")
+
+        self.model_manager = ModelManager(
+            dossier_models=dossier_models,
+            llama_binaire=llama_binaire,
+            mode="swap",
+        )
+        self.director = build_default_director(
+            dossier=dossier,
+            model_manager=self.model_manager,
+        )
+        self.lbl.text = "Pret ! Touche la bulle pour parler."
 
     def touche_titre(self, w, touch):
         if w.collide_point(*touch.pos):
@@ -1040,7 +1080,7 @@ class JinxApp(App):
     def penser(self, texte):
         dossier = self.user_data_dir
 
-        # 1) Commandes mémoire locales rapides
+        # 1) Commandes memoire locales rapides
         try:
             rep = commande_memoire(dossier, texte)
         except Exception:
@@ -1049,37 +1089,36 @@ class JinxApp(App):
             Clock.schedule_once(lambda d: self.repondre(texte, rep))
             return
 
-        # 2) Contexte mémoire + exemples de personnalité
+        # 2) Contexte memoire + exemples
         try:
             ctx_mem, exemples = contexte_memoire(dossier, texte)
         except Exception:
             ctx_mem, exemples = "", []
 
-        # 3) Créer le directeur une seule fois
-        if not hasattr(self, "director"):
-            db_path = os.path.join(dossier, "jinx.db")
-            self.director = build_default_director(
-                db_path=db_path,
-                llm_fn=lambda q, ctx: demander_ia(
-                    q, (ctx.get("memoire", ""), ctx.get("exemples", []))
-                ),
-            )
-
-        # 4) Callback quand le directeur a fini
+        # 3) Callback final
         def _reponse(rep):
-            if SET["historique"]:
+            if SET.get("historique"):
                 try:
                     enregistrer(dossier, texte, rep)
                 except Exception:
                     pass
             self.repondre(texte, rep)
 
-        # 5) Routage + exécution en arrière-plan
+        # 4) Directeur pret ?
+        if not getattr(self, "director", None):
+            Clock.schedule_once(lambda d: self.repondre(
+                texte, "Patientez, l'installation n'est pas terminee."))
+            return
+
+        # 5) Lancer le directeur
         self.director.handle_async(
             texte,
             callback=_reponse,
-            context={"memoire": ctx_mem, "exemples": exemples},
+            context={"memoire": ctx_mem, "exemples": exemples,
+                     "temperature": SET.get("creativite", 0.3),
+                     "max_tokens": 400},
         )
+
 
     def repondre(self, texte, rep):
         self.bulle.set_etat("parle")
@@ -1233,6 +1272,16 @@ class JinxApp(App):
         section("Agent Directeur")
         note("Le directeur orchestre les agents de Jinx.")
         pleine("Voir les agents", _ouvrir_agents)
+
+        def _ouvrir_agents_v4():
+            if getattr(self, "director", None):
+                ouvrir_panneau_agents(self.director)
+            else:
+                self.lbl.text = "Modeles pas encore prets."
+
+        section("Agent Directeur")
+        note("Le directeur orchestre les 6 agents de Jinx.")
+        pleine("Voir les agents", _ouvrir_agents_v4)
 
         haut = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         haut.add_widget(Label(text="Paramètres", bold=True, font_size="20sp",
