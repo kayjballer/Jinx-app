@@ -3,11 +3,18 @@ from __future__ import annotations
 
 import logging
 import os
+import ssl
 import subprocess
 import threading
 import time
 from typing import Dict, Optional
 from urllib import request
+
+try:
+    import certifi
+    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+except Exception:
+    _SSL_CTX = ssl.create_default_context()
 
 from .models_catalog import CATALOG
 
@@ -38,7 +45,7 @@ class ModelManager:
         t0 = time.time()
         while time.time() - t0 < timeout:
             try:
-                with request.urlopen(url, timeout=2) as r:
+                with request.urlopen(url, timeout=2, context=_SSL_CTX) as r:
                     if r.status == 200:
                         return True
             except Exception:

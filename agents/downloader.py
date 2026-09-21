@@ -2,12 +2,19 @@
 from __future__ import annotations
 
 import hashlib
+import ssl
 import logging
 import os
 import threading
 import time
 from typing import Callable, Optional
 from urllib import request
+
+try:
+    import certifi
+    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+except Exception:
+    _SSL_CTX = ssl.create_default_context()
 
 from .models_catalog import CATALOG, total_mo
 
@@ -51,7 +58,7 @@ class ModelDownloader:
             req.add_header("Range", f"bytes={deja}-")
 
         try:
-            with request.urlopen(req, timeout=30) as r:
+            with request.urlopen(req, timeout=30, context=_SSL_CTX) as r:
                 total = int(r.headers.get("Content-Length", 0)) + deja
                 mode = "ab" if deja > 0 else "wb"
                 with open(part, mode) as f:

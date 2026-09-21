@@ -5,8 +5,15 @@ import datetime
 import logging
 import os
 import re
+import ssl
 
 from .base import Agent, AgentDB, sans_accents
+
+try:
+    import certifi
+    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+except Exception:
+    _SSL_CTX = ssl.create_default_context()
 
 log = logging.getLogger("jinx.workers")
 

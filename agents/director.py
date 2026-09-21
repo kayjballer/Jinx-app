@@ -3,11 +3,18 @@ from __future__ import annotations
 
 import json
 import logging
+import ssl
 import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib import request
+
+try:
+    import certifi
+    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+except Exception:
+    _SSL_CTX = ssl.create_default_context()
 
 from .base import Agent
 from .workers import (TimeAgent, MathAgent, DictionnaireAgent,
@@ -86,7 +93,7 @@ class Director:
             req = request.Request(url, data=data,
                                   headers={"Content-Type": "application/json"})
             try:
-                with request.urlopen(req, timeout=300) as r:
+                with request.urlopen(req, timeout=300, context=_SSL_CTX) as r:
                     body = json.loads(r.read().decode("utf-8"))
                 return body["choices"][0]["message"]["content"].strip()
             except Exception as e:
