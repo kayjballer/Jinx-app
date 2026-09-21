@@ -1011,6 +1011,26 @@ class JinxApp(App):
         )
         self.lbl.text = "Pret ! Touche la bulle pour parler."
 
+
+    def _telecharger_manuel(self, *a):
+        dossier = self.user_data_dir
+        dossier_models = os.path.join(dossier, "models")
+        if not hasattr(self, "downloader"):
+            self.downloader = ModelDownloader(dossier_models)
+        manquants = self.downloader.manquants()
+        if not manquants:
+            self.lbl.text = "Tous les modeles sont deja installes."
+            self._modeles_prets()
+            return
+        self.lbl.text = "Telechargement de %d modele(s)..." % len(manquants)
+        afficher_splash_dl(
+            self.downloader,
+            on_done=self._modeles_prets,
+            on_error=lambda: setattr(
+                self.lbl, "text",
+                "Erreur pendant le telechargement. Relance Jinx."),
+        )
+
     def touche_titre(self, w, touch):
         if w.collide_point(*touch.pos):
             self.ouvrir_reglages()
@@ -1312,21 +1332,6 @@ class JinxApp(App):
             box.add_widget(sl)
             ligne(texte, box, 62)
 
-        def _ouvrir_agents():
-            if not hasattr(self, "director"):
-                db_path = os.path.join(self.user_data_dir, "jinx.db")
-                self.director = build_default_director(
-                    db_path=db_path,
-                    llm_fn=lambda q, ctx: demander_ia(
-                        q, (ctx.get("memoire", ""), ctx.get("exemples", []))
-                    ),
-                )
-            ouvrir_panneau_agents(self.director)
-
-        section("Agent Directeur")
-        note("Le directeur orchestre les agents de Jinx.")
-        pleine("Voir les agents", _ouvrir_agents)
-
         def _ouvrir_agents_v4():
             if getattr(self, "director", None):
                 ouvrir_panneau_agents(self.director)
@@ -1336,6 +1341,7 @@ class JinxApp(App):
         section("Agent Directeur")
         note("Le directeur orchestre les 6 agents de Jinx.")
         pleine("Voir les agents", _ouvrir_agents_v4)
+        pleine("Telecharger les modeles", self._telecharger_manuel)
 
         haut = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         haut.add_widget(Label(text="Paramètres", bold=True, font_size="20sp",
