@@ -39,6 +39,9 @@ try:
 except Exception:
     CTX = ssl.create_default_context()
 
+from agents.director import build_default_director
+from agents.panel import ouvrir_panneau_agents
+
 VERSION = "0.31"
 URL = "http://127.0.0.1:8080/v1/chat/completions"
 PROC = None
@@ -1036,27 +1039,47 @@ class JinxApp(App):
 
     def penser(self, texte):
         dossier = self.user_data_dir
-        log = False
+
+        # 1) Commandes mémoire locales rapides
         try:
             rep = commande_memoire(dossier, texte)
         except Exception:
             rep = None
-        if rep is None:
-            try:
-                ctx = contexte_memoire(dossier, texte)
-            except Exception:
-                ctx = ("", [])
-            try:
-                rep = demander_ia(texte, ctx)
-                log = SET["historique"]
-            except Exception:
-                rep = "Je n'arrive pas a joindre mon cerveau. Ouvre les parametres, les trois points en bas, pour le redemarrer."
-        if log:
-            try:
-                enregistrer(dossier, texte, rep)
-            except Exception:
-                pass
-        Clock.schedule_once(lambda d: self.repondre(texte, rep))
+        if rep is not None:
+            Clock.schedule_once(lambda d: self.repondre(texte, rep))
+            return
+
+        # 2) Contexte mémoire + exemples de personnalité
+        try:
+            ctx_mem, exemples = contexte_memoire(dossier, texte)
+        except Exception:
+            ctx_mem, exemples = "", []
+
+        # 3) Créer le directeur une seule fois
+        if not hasattr(self, "director"):
+            db_path = os.path.join(dossier, "jinx.db")
+            self.director = build_default_director(
+                db_path=db_path,
+                llm_fn=lambda q, ctx: demander_ia(
+                    q, (ctx.get("memoire", ""), ctx.get("exemples", []))
+                ),
+            )
+
+        # 4) Callback quand le directeur a fini
+        def _reponse(rep):
+            if SET["historique"]:
+                try:
+                    enregistrer(dossier, texte, rep)
+                except Exception:
+                    pass
+            self.repondre(texte, rep)
+
+        # 5) Routage + exécution en arrière-plan
+        self.director.handle_async(
+            texte,
+            callback=_reponse,
+            context={"memoire": ctx_mem, "exemples": exemples},
+        )
 
     def repondre(self, texte, rep):
         self.bulle.set_etat("parle")
@@ -1195,6 +1218,21 @@ class JinxApp(App):
             box.add_widget(val)
             box.add_widget(sl)
             ligne(texte, box, 62)
+
+        def _ouvrir_agents():
+            if not hasattr(self, "director"):
+                db_path = os.path.join(self.user_data_dir, "jinx.db")
+                self.director = build_default_director(
+                    db_path=db_path,
+                    llm_fn=lambda q, ctx: demander_ia(
+                        q, (ctx.get("memoire", ""), ctx.get("exemples", []))
+                    ),
+                )
+            ouvrir_panneau_agents(self.director)
+
+        section("Agent Directeur")
+        note("Le directeur orchestre les agents de Jinx.")
+        pleine("Voir les agents", _ouvrir_agents)
 
         haut = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         haut.add_widget(Label(text="Paramètres", bold=True, font_size="20sp",
