@@ -1,2 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Sauvegardes de dev
+*.bak
+*.avant_*
+*.v1
+*.save
+
+# Modèles GGUF (téléchargés au 1er lancement)
+*.gguf
+models/
+
+# Bases lourdes (téléchargées au 1er lancement si > 100 Mo)
+dict.db
+*.db.gz
+
+# Buildozer
 .buildozer/
 bin/
+build/
+dist/
+
+# Divers
+.DS_Store
+*.log
+nohup.out
