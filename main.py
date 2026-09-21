@@ -836,6 +836,56 @@ class BoutonPoints(Widget):
         return super().on_touch_down(touch)
 
 
+def trouver_llama_server(dossier):
+    """Trouve llama-server : user_data, nativeLibraryDir ou PATH.
+    Copie dans user_data/llama-server avec chmod +x si nécessaire."""
+    import shutil, stat
+    cible = os.path.join(dossier, "llama-server")
+
+    # 1) Déjà dans user_data ?
+    if os.path.exists(cible) and os.access(cible, os.X_OK):
+        return cible
+
+    # 2) Dossier natif Android (libllama_server.so packagé par Buildozer)
+    candidats = []
+    try:
+        from jnius import autoclass
+        PythonActivity = autoclass("org.kivy.android.PythonActivity")
+        info = PythonActivity.mActivity.getApplicationInfo()
+        natif = info.nativeLibraryDir
+        candidats.append(os.path.join(natif, "libllama_server.so"))
+    except Exception as e:
+        print("nativeLibraryDir indispo:", e)
+
+    # 3) Autres chemins possibles
+    candidats += [
+        "/data/data/org.jinx.jinx/files/llama-server",
+        "/data/data/com.jinx/files/llama-server",
+        os.path.join(dossier, "lib", "libllama_server.so"),
+    ]
+
+    for c in candidats:
+        if os.path.exists(c):
+            try:
+                shutil.copy2(c, cible)
+                os.chmod(cible, 0o755)
+                print("llama-server copié depuis", c)
+                return cible
+            except Exception as e:
+                print("copie impossible (%s): %s" % (c, e))
+                # Fallback : exécuter directement depuis le chemin source
+                if os.access(c, os.X_OK):
+                    return c
+
+    # 4) Dans le PATH ?
+    p = shutil.which("llama-server")
+    if p:
+        return p
+
+    print("llama-server introuvable")
+    return None
+
+
 def marges_systeme():
     if platform != "android":
         return 0, 0
@@ -944,7 +994,11 @@ class JinxApp(App):
     def _modeles_prets(self, *a):
         dossier = self.user_data_dir
         dossier_models = os.path.join(dossier, "models")
-        llama_binaire = os.path.join(dossier, "llama-server")
+        llama_binaire = trouver_llama_server(dossier)
+        if not llama_binaire:
+            self.lbl.text = "Erreur : llama-server introuvable dans l'APK."
+            return
+        print("llama-server :", llama_binaire)
 
         self.model_manager = ModelManager(
             dossier_models=dossier_models,
