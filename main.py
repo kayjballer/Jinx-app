@@ -43,6 +43,7 @@ except Exception:
 from agents import build_default_director, ModelManager, ModelDownloader
 from agents.splash import afficher_splash_dl
 from agents.panel import ouvrir_panneau_agents
+from agents.conversations import ConversationStore
 
 VERSION = "0.31"
 URL = "http://127.0.0.1:8080/v1/chat/completions"
@@ -1009,6 +1010,7 @@ class JinxApp(App):
             dossier=dossier,
             model_manager=self.model_manager,
         )
+        self.director._init_conv_store(dossier)
         self.lbl.text = "Pret ! Touche la bulle pour parler."
 
 
@@ -1030,6 +1032,72 @@ class JinxApp(App):
                 self.lbl, "text",
                 "Erreur pendant le telechargement. Relance Jinx."),
         )
+
+
+    def _ouvrir_historique(self, *a):
+        from kivy.uix.modalview import ModalView
+        from kivy.uix.scrollview import ScrollView
+        from kivy.uix.boxlayout import BoxLayout
+        from kivy.uix.label import Label
+        from kivy.uix.button import Button
+
+        store = ConversationStore(self.user_data_dir)
+        n = store.compter()
+        convs = store.lister(limite=50)
+
+        mv = ModalView(size_hint=(0.94, 0.85),
+                       background_color=(0.04, 0.03, 0.02, 0.98))
+        root = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(8))
+
+        titre = Label(text="[b]Historique — %d conversation(s)[/b]" % n,
+                      markup=True, size_hint_y=None, height=dp(36),
+                      font_size="16sp", color=(0.95, 0.75, 0.35, 1))
+        root.add_widget(titre)
+
+        if not convs:
+            root.add_widget(Label(text="Aucune conversation enregistrée."))
+        else:
+            sv = ScrollView()
+            liste = BoxLayout(orientation="vertical", size_hint_y=None,
+                              spacing=dp(6))
+            liste.bind(minimum_height=liste.setter("height"))
+            for c in convs:
+                card = BoxLayout(orientation="vertical", size_hint_y=None,
+                                 height=dp(90), padding=dp(6), spacing=dp(2))
+                q = c["question"][:80]
+                r = c["reponse"][:120]
+                lbl = Label(text="[b]%s[/b] (%s)\n%s" % (c["ts"][:16], c["agent"], q),
+                            markup=True, size_hint_y=None, height=dp(28),
+                            halign="left", valign="middle", font_size="12sp")
+                lbl.bind(size=lbl.setter("text_size"))
+                rep = Label(text="→ " + r,
+                            size_hint_y=None, height=dp(48),
+                            halign="left", valign="top", font_size="11sp",
+                            color=(0.85, 0.85, 0.85, 1))
+                rep.bind(size=rep.setter("text_size"))
+                card.add_widget(lbl)
+                card.add_widget(rep)
+                liste.add_widget(card)
+            sv.add_widget(liste)
+            root.add_widget(sv)
+
+        btns = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
+        bt_eff = Button(text="Effacer tout", background_color=(0.7, 0.2, 0.15, 1))
+        bt_fer = Button(text="Fermer")
+
+        def effacer(*a):
+            n2 = store.effacer_tout()
+            self.lbl.text = "Historique effacé : %d supprimées." % n2
+            mv.dismiss()
+
+        bt_eff.bind(on_release=effacer)
+        bt_fer.bind(on_release=lambda *a: mv.dismiss())
+        btns.add_widget(bt_eff)
+        btns.add_widget(bt_fer)
+        root.add_widget(btns)
+
+        mv.add_widget(root)
+        mv.open()
 
     def touche_titre(self, w, touch):
         if w.collide_point(*touch.pos):
@@ -1342,6 +1410,7 @@ class JinxApp(App):
         note("Le directeur orchestre les 6 agents de Jinx.")
         pleine("Voir les agents", _ouvrir_agents_v4)
         pleine("Telecharger les modeles", self._telecharger_manuel)
+        pleine("Historique des conversations", self._ouvrir_historique)
 
         haut = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         haut.add_widget(Label(text="Paramètres", bold=True, font_size="20sp",

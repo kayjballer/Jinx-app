@@ -19,6 +19,7 @@ except Exception:
 from .base import Agent
 from .workers import (TimeAgent, MathAgent, DictionnaireAgent,
                       MemoryAgent, CodeAgent, EchoAgent)
+from .conversations import ConversationAgent, ConversationStore
 from .model_manager import ModelManager
 
 log = logging.getLogger("jinx.director")
@@ -41,6 +42,7 @@ class Director:
         self.model_manager = model_manager
         self.history: List[Dict[str, Any]] = []
         self._lock = threading.Lock()
+        self._conv_store = None
 
     def register(self, agent: Agent) -> None:
         with self._lock:
@@ -100,6 +102,21 @@ class Director:
                 return f"Erreur modele {model_name} : {e}"
         return _call
 
+    def _init_conv_store(self, dossier: str) -> None:
+        if self._conv_store is None:
+            try:
+                self._conv_store = ConversationStore(dossier)
+            except Exception as e:
+                log.warning("conv_store: %s", e)
+
+    def _log_conversation(self, query: str, reponse: str, agents: list) -> None:
+        if self._conv_store is None:
+            return
+        try:
+            self._conv_store.enregistrer(query, reponse, ",".join(agents))
+        except Exception as e:
+            log.warning("log conv: %s", e)
+
     def handle(self, query: str, context: Optional[Dict[str, Any]] = None) -> str:
         context = dict(context or {})
         picked = self.select_agents(query)
@@ -127,10 +144,14 @@ class Director:
                 results.append(AgentResult(name, "", False, str(e), time.time() - t0))
         if len(results) == 1:
             r = results[0]
-            return r.output if r.success else f"Erreur : {r.error}"
-        return "\n".join(
+            final = r.output if r.success else f"Erreur : {r.error}"
+            self._log_conversation(query, final, [r.agent])
+            return final
+        final = "\n".join(
             f"- {r.agent} : {r.output}" if r.success
             else f"- {r.agent} : echec ({r.error})" for r in results)
+        self._log_conversation(query, final, [r.agent for r in results])
+        return final
 
     def handle_async(self, query, callback, context=None):
         def worker():
@@ -154,5 +175,6 @@ def build_default_director(dossier: str,
     d.register(DictionnaireAgent(dossier))
     d.register(MemoryAgent(dossier))
     d.register(CodeAgent(dossier))
+    d.register(ConversationAgent(dossier))
     d.register(EchoAgent(dossier))
     return d
