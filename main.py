@@ -43,6 +43,7 @@ except Exception:
 from agents import build_default_director, ModelManager, ModelDownloader
 from agents.splash import afficher_splash_dl
 from agents.panel import ouvrir_panneau_agents
+from agents.bulle2d import Bulle2D
 from agents.conversations import ConversationStore
 
 VERSION = "0.31"
@@ -724,7 +725,7 @@ class Bulle(Widget):
                            for _ in range(3)]
             if Callback:
                 Callback(_normal)
-        self.set_fps(30)
+        self.set_fps(20)
 
     def set_fps(self, fps):
         if self._ev is not None:
@@ -962,7 +963,7 @@ class JinxApp(App):
         self.titre = Label(text="J.I.N.X", font_size="22sp", bold=True,
                            color=(1, 0.75, 0.25, 1), size_hint=(1, .07))
         self.titre.bind(on_touch_down=self.touche_titre)
-        self.bulle = Bulle(self.ecouter, size_hint=(1, .56))
+        self.bulle = Bulle2D(self.ecouter, size_hint=(1, .56))
         self.etat_lbl = Label(text="Touche la bulle pour parler",
                               font_size="14sp", color=(0.85, 0.65, 0.30, 1),
                               size_hint=(1, .07))
@@ -972,39 +973,28 @@ class JinxApp(App):
         self.lbl.color = (1, 0.93, 0.78, 1)
         for w in (self.titre, self.bulle, self.etat_lbl):
             col.add_widget(w)
-        # --- Zone de texte défilante ---
+        # --- Zone de texte (hauteur FIXE, pas de binding dynamique) ---
         self.scroll_texte = ScrollView(
             do_scroll_x=False,
             do_scroll_y=True,
-            bar_width=dp(3),
-            bar_color=(1, 0.9, 0.7, 0.6),
-            bar_inactive_color=(1, 0.9, 0.7, 0.2),
+            bar_width=dp(2),
+            bar_color=(1, 0.9, 0.7, 0.4),
             size_hint_y=None,
             height=dp(200),
         )
-        # Le Label doit avoir une largeur fixe (= largeur scroll) et hauteur auto
         self.lbl.size_hint = (1, None)
-        self.lbl.height = dp(60)
-        self.lbl.markup = True
-        self.lbl.valign = "top"
-
-        def _sync_largeur(scroll, largeur):
-            # Le Label utilise toute la largeur dispo (moins 20px de marge)
-            self.lbl.text_size = (max(largeur - dp(20), dp(100)), None)
-
-        def _maj_hauteur(w, sz):
-            new_h = max(sz[1] + dp(10), dp(60))
-            if new_h != w.height:
-                w.height = new_h
-                # Auto-scroll vers le bas (plus récent en bas)
-                Clock.schedule_once(
-                    lambda d: setattr(self.scroll_texte, "scroll_y", 0),
-                    0.1)
-
-        self.scroll_texte.bind(width=_sync_largeur)
-        self.lbl.bind(texture_size=_maj_hauteur)
+        self.lbl.height = dp(200)
+        self.lbl.text_size = (Window.width - dp(40), None)
         self.scroll_texte.add_widget(self.lbl)
         col.add_widget(self.scroll_texte)
+
+        # Mettre à jour la largeur UNIQUEMENT quand la fenêtre change
+        def _on_window_resize(win, taille):
+            try:
+                self.lbl.text_size = (taille[0] - dp(40), None)
+            except Exception:
+                pass
+        Window.bind(size=_on_window_resize)
 
         fl = FloatLayout()
         fl.add_widget(col)
@@ -1051,7 +1041,7 @@ class JinxApp(App):
         r, g, b = pal["veille"]
         self.bulle.theme = SET["theme"]
         self.bulle.halo_mult = float(SET["halo"])
-        self.bulle.set_fps(15 if SET["eco"] else 30)
+        self.bulle.set_fps(15 if SET["eco"] else 25)
         self.titre.color = (r, g, b, 1)
         self.etat_lbl.color = (r * 0.9, g * 0.9, b * 0.7, 1)
         self.points.couleur = (r, g, b, 0.9)
