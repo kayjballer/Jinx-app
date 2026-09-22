@@ -221,16 +221,35 @@ class DictionnaireAgent(Agent):
 
 # ==================== MEMORY ====================
 class MemoryAgent(Agent):
+    """
+    Mémoire unifiée : faits utilisateur + historique conversations.
+    """
     name = "memory"
-    description = "Retient et restitue des faits utilisateur (modèle 0.5B)."
-    keywords = ["souviens", "rappelle", "retiens", "mémoire"]
-    requires_model = "memory"
+    description = ("Retient des faits + consulte l'historique des conversations.")
+    keywords = ["souviens", "rappelle", "retiens", "mémoire",
+                "historique", "conversations", "on a dit", "on a parlé"]
+    requires_model = None
 
     _RETENIR = re.compile(
         r"\b(?:retiens|souviens[- ]toi|m[ée]morise)\s+que\s+(.+)", re.IGNORECASE)
+    # Exclut les cas avec un délai (dans X minutes) → gérés par alarm
+    # Tolère les variations STT : "qu'est-ce" / "qu est ce" / "quest ce"
     _RAPPELER = re.compile(
-        r"\b(?:rappelle[- ]moi|qu'?est[- ]ce\s+que\s+tu\s+sais\s+sur|"
-        r"tu\s+te\s+souviens\s+de)\s+(.+)", re.IGNORECASE)
+        r"\b(?:"
+        r"rappelle[- ]moi(?!\s+dans)|"
+        r"qu\s*'?\s*est\s*[- ]?\s*ce\s+que\s+tu\s+sais\s+sur|"
+        r"que\s+sais[- ]tu\s+sur|"
+        r"tu\s+te\s+souviens\s+de|"
+        r"tu\s+sais\s+quoi\s+sur"
+        r")\s*(.+)", re.IGNORECASE)
+    _HISTORIQUE = re.compile(
+        r"\b(historique|conversations?|on\s+a\s+(dit|parl[ée])|"
+        r"combien\s+de\s+conversations?|"
+        r"(montre|affiche|liste)[- ]moi\s+(l'?historique|les\s+conversations?)|"
+        r"cherche\s+dans\s+(nos\s+)?(conversations?|l'?historique)|"
+        r"la\s+derni[èe]re\s+fois|"
+        r"efface\s+l'?historique|supprime\s+l'?historique)\b",
+        re.IGNORECASE)
 
     def __init__(self, dossier, llm_fn=None):
         super().__init__(dossier)
@@ -240,19 +259,45 @@ class MemoryAgent(Agent):
             schema="""CREATE TABLE IF NOT EXISTS facts(
                 key TEXT PRIMARY KEY, value TEXT,
                 cree_le TIMESTAMP DEFAULT CURRENT_TIMESTAMP);""")
+        # ConversationStore pour l'historique
+        self._conv = None
+
+    def _get_conv(self):
+        if self._conv is None:
+            try:
+                from .conversations import ConversationStore
+                self._conv = ConversationStore(self.dossier)
+            except Exception as e:
+                log.warning("conv store: %s", e)
+        return self._conv
 
     def match(self, query):
+        q = sans_accents(query)
+        # Ne pas intercepter les rappels temporels (dans X minutes)
+        if re.search(r"dans\s+\d+\s*(seconde|minute|heure|sec|min|h)s?",
+                     q, re.IGNORECASE):
+            return 0.0
         if self._RETENIR.search(query) or self._RAPPELER.search(query):
             return 0.95
+        if self._HISTORIQUE.search(q):
+            return 0.92
         return 0.0
 
     def run(self, query, context):
+        q = sans_accents(query).lower()
+
+        # --- Historique conversations ---
+        if self._HISTORIQUE.search(q):
+            return self._reponse_historique(q, query)
+
+        # --- Faits utilisateur ---
         m = self._RETENIR.search(query)
         if m:
             fact = m.group(1).strip(" .!?")
             self.db.execute("INSERT OR REPLACE INTO facts(key,value) VALUES (?,?)",
                             (fact, fact))
             return f"C'est noté : {fact}"
+
         m = self._RAPPELER.search(query)
         if m:
             key = m.group(1).strip(" .!?")
@@ -261,7 +306,56 @@ class MemoryAgent(Agent):
             if rows:
                 return "Je me souviens : " + " ; ".join(r[0] for r in rows)
             return "Je n'ai rien en mémoire là-dessus."
+
         return "Dis-moi quoi retenir ou quoi me rappeler."
+
+    def _reponse_historique(self, q, query):
+        store = self._get_conv()
+        if not store:
+            return "Historique indisponible."
+
+        # Effacer
+        if "efface" in q or "supprime" in q:
+            n = store.effacer_tout()
+            return f"Historique effacé : {n} conversations supprimées."
+
+        # Combien
+        if "combien" in q:
+            n = store.compter()
+            if n == 0:
+                return "Aucune conversation enregistrée."
+            return f"Nous avons {n} conversation(s) enregistrée(s)."
+
+        # Recherche par mots-clés
+        m = re.search(
+            r"(?:sur|à propos de|au sujet de|concernant|dis[ -]?moi\s+sur)\s+(.+)",
+            query, re.IGNORECASE)
+        terme = m.group(1).strip(" ?!.,;:") if m else None
+        if not terme:
+            for mc in ["hier", "avant-hier", "aujourd'hui", "la dernière fois"]:
+                if mc in q:
+                    terme = mc
+                    break
+
+        if terme:
+            res = store.rechercher(terme, limite=5)
+            if not res:
+                return f"Rien trouvé sur « {terme} »."
+            lignes = [f"J'ai trouvé {len(res)} conversation(s) :"]
+            for r in res[:3]:
+                qc = r["question"][:60]
+                lignes.append(f"• [{r['ts']}] {qc}")
+            return "\n".join(lignes)
+
+        # Liste
+        res = store.lister(limite=5)
+        if not res:
+            return "Aucune conversation."
+        lignes = ["Voici vos 5 dernières conversations :"]
+        for r in res:
+            qc = r["question"][:55]
+            lignes.append(f"• [{r['ts']}] ({r['agent']}) {qc}")
+        return "\n".join(lignes)
 
 
 # ==================== CODE ====================

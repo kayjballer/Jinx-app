@@ -90,10 +90,16 @@ class ResearcherAgent(Agent):
                 "apprends", "enrichis", "actualise"]
     requires_model = None
 
+    # Verbe + mot "web/internet/wiki" dans les 40 caractères suivants
     _R = re.compile(
-        r"\b(cherche\s+sur\s+internet|recherche\s+web|va\s+chercher|"
-        r"apprends\s+|enrichis\s+|actualise\s+)\b",
-        re.IGNORECASE,
+        r"\b(cherche|chercher|recherche|rechercher|trouve|trouver|"
+        r"apprends|apprendre|enrichis|enrichir|actualise|actualiser|"
+        r"va\s+chercher|va\s+voir|"
+        r"regarde|regarder)\b"
+        r".{0,40}"
+        r"\b(internet|web|wiki|wikipedia|google|en\s+ligne|"
+        r"la\s+v[ée]rit[ée]|des\s+infos?|des\s+informations?)\b",
+        re.IGNORECASE | re.DOTALL,
     )
 
     def __init__(self, dossier: str, llm_fn=None):

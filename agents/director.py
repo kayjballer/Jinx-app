@@ -17,13 +17,15 @@ except Exception:
     _SSL_CTX = ssl.create_default_context()
 
 from .base import Agent
-from .workers import (TimeAgent, MathAgent, DictionnaireAgent,
-                      MemoryAgent, CodeAgent, EchoAgent)
-from .conversations import ConversationAgent, ConversationStore
+from .workers import (MathAgent, DictionnaireAgent,
+                      MemoryAgent, CodeAgent)
+from .conversations import ConversationStore
 from .model_manager import ModelManager
 from .permissions import PermissionManager, Niveau, get_perms
 from .researcher import ResearcherAgent, WebCache
 from .system_agent import SystemAgent
+from .jarvis_agents import (AlarmAgent, CalendarAgent,
+                             MediaAgent, SystemControlAgent)
 
 log = logging.getLogger("jinx.director")
 
@@ -84,14 +86,12 @@ class Director:
         scores.sort(reverse=True, key=lambda t: t[0])
         if scores:
             top = scores[0][1]
-            # Vérifier la permission
             if self.perms:
                 peut, besoin_confirm, niv = self.perms.peut_executer(top)
                 if besoin_confirm:
-                    # On marque l'agent comme "à confirmer" via un préfixe
                     return ["__CONFIRM__" + top]
             return [top]
-        return ["echo"]
+        return ["__LLM__"]
 
     def _llm_pour(self, model_name: str, url: str):
         def _call(prompt: str, context: Dict[str, Any]) -> str:
@@ -156,8 +156,22 @@ class Director:
         # Cas spécial : action critique → demander confirmation
         if picked and picked[0].startswith("__CONFIRM__"):
             agent_name = picked[0].replace("__CONFIRM__", "")
-            # On retourne un marqueur que main.py va intercepter
             return f"[JINX_CONFIRM]{agent_name}|||{query}|||Action sensible : {agent_name}"
+
+        # Cas spécial : LLM direct (plus d'agent echo)
+        if picked and picked[0] == "__LLM__":
+            llm_fn = context.get("llm_fn")
+            if not llm_fn:
+                return "Aucun agent disponible pour cette demande."
+            try:
+                memoire = context.get("memoire", "")
+                exemples = context.get("exemples", [])
+                rep = llm_fn(query, (memoire, exemples))
+                self._log_conversation(query, rep, ["llm"])
+                return rep
+            except Exception as e:
+                log.exception("LLM direct")
+                return f"Erreur LLM : {e}"
         results: List[AgentResult] = []
         for name in picked:
             agent = self.agents[name]
@@ -207,12 +221,14 @@ def build_default_director(dossier: str,
                            model_manager: Optional[ModelManager] = None) -> Director:
     d = Director(model_manager=model_manager)
     d.register(SystemAgent(dossier))
-    d.register(TimeAgent(dossier))
+    d.register(AlarmAgent(dossier))
+    d.register(CalendarAgent(dossier))
+    d.register(MediaAgent(dossier))
+    d.register(SystemControlAgent(dossier))
     d.register(MathAgent(dossier))
     d.register(DictionnaireAgent(dossier))
     d.register(MemoryAgent(dossier))
+    d.register(ResearcherAgent(dossier))
     d.register(CodeAgent(dossier))
-    d.register(ConversationAgent(dossier))
-    d.register(EchoAgent(dossier))
     d.perms = PermissionManager(dossier)
     return d

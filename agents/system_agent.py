@@ -51,6 +51,11 @@ class SystemAgent(Agent):
     _R_AVION = re.compile(
         r"\b(mode\s+avion|avion|a[ée]roport|offline)\b", re.IGNORECASE)
 
+    _R_HEURE = re.compile(
+        r"\b(quelle?\s+heure|il\s+est\s+quelle\s+heure|"
+        r"quel\s+jour|quelle?\s+date|on\s+est\s+quel|"
+        r"donne[- ]moi\s+l'?heure|la\s+date)\b", re.IGNORECASE)
+
     _R_RESUME = re.compile(
         r"\b([ée]tat\s+(du|de\s+mon|de\s+la)|"
         r"comment\s+va\s+(mon|le)\s+(t[ée]l[ée]phone|syst[è]me)|"
@@ -64,23 +69,34 @@ class SystemAgent(Agent):
 
     def match(self, query: str) -> float:
         q = sans_accents(query)
-        # Exclusions : ne pas intercepter les recherches web
-        exclusions = ["cherche sur internet", "recherche web", "va chercher",
-                      "apprends", "enrichis", "actualise", "wikipedia",
-                      "qui est", "c'est quoi la", "c'est quoi le",
-                      "raconte", "explique"]
+        # Exclusions : si un verbe de recherche est présent, on laisse à researcher
+        import re as _re
+        verbe_recherche = _re.search(
+            r"\b(cherche|chercher|recherche|rechercher|trouve|trouver|"
+            r"apprends|apprendre|enrichis|enrichir|actualise|actualiser|"
+            r"va\s+chercher|va\s+voir|regarde|regarder)\b",
+            q, _re.IGNORECASE)
+        if verbe_recherche:
+            return 0.0
+        # Autres exclusions
+        exclusions = ["qui est", "c'est quoi", "raconte", "explique",
+                      "explique-moi", "définis", "définition"]
         for ex in exclusions:
             if ex in q:
                 return 0.0
-        for regex in (self._R_BATTERIE, self._R_WIFI, self._R_RAM,
-                      self._R_STOCKAGE, self._R_ECRAN, self._R_AVION,
-                      self._R_RESUME):
+        for regex in (self._R_HEURE, self._R_BATTERIE, self._R_WIFI,
+                      self._R_RAM, self._R_STOCKAGE, self._R_ECRAN,
+                      self._R_AVION, self._R_RESUME):
             if regex.search(q):
                 return 0.92
         return 0.0
 
     def run(self, query: str, context: Dict[str, Any]) -> str:
         q = sans_accents(query)
+
+        # 0) Heure / date
+        if self._R_HEURE.search(q):
+            return self._reponse_heure()
 
         # 1) Batterie
         if self._R_BATTERIE.search(q) and not self._R_RESUME.search(q):
@@ -116,6 +132,11 @@ class SystemAgent(Agent):
     # ===================================================================
     # RÉPONSES
     # ===================================================================
+
+    def _reponse_heure(self) -> str:
+        import datetime
+        now = datetime.datetime.now()
+        return now.strftime("Il est %H:%M, le %d/%m/%Y.")
 
     def _reponse_batterie(self) -> str:
         b = self.core.batterie()

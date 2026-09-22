@@ -47,6 +47,37 @@ from agents.conversations import ConversationStore
 
 VERSION = "0.31"
 STOP_TTS = False
+_TTS_SINGLETON = {"instance": None}
+
+
+def _get_tts():
+    """Retourne une instance TTS UNIQUE (créée si besoin)."""
+    if _TTS_SINGLETON["instance"] is None:
+        try:
+            _TTS_SINGLETON["instance"] = tts_java()
+        except Exception:
+            pass
+    return _TTS_SINGLETON["instance"]
+
+
+def _stop_tts():
+    """Arrête immédiatement la lecture vocale."""
+    global STOP_TTS
+    STOP_TTS = True
+    t = _get_tts()
+    if t:
+        try:
+            t.stop()
+            print("TTS arrêté")
+        except Exception as e:
+            print("stop TTS échoué:", e)
+    # Fallback plyer
+    try:
+        from plyer import tts as _p
+        if hasattr(_p, "stop"):
+            _p.stop()
+    except Exception:
+        pass
 URL = "http://127.0.0.1:8080/v1/chat/completions"
 PROC = None
 
@@ -364,7 +395,7 @@ def parler_texte(texte, force=False):
     if platform == "android":
         try:
             from jnius import autoclass
-            t = tts_java()
+            t = _get_tts()
             if SET["voix_nom"]:
                 it = t.getVoices().iterator()
                 while it.hasNext():
@@ -953,20 +984,25 @@ class JinxApp(App):
         )
         # Le Label doit avoir une largeur fixe (= largeur scroll) et hauteur auto
         self.lbl.size_hint = (1, None)
-        self.lbl.text_size = (Window.width - dp(30), None)
         self.lbl.height = dp(60)
+        self.lbl.markup = True
+        self.lbl.valign = "top"
+
+        def _sync_largeur(scroll, largeur):
+            # Le Label utilise toute la largeur dispo (moins 20px de marge)
+            self.lbl.text_size = (max(largeur - dp(20), dp(100)), None)
 
         def _maj_hauteur(w, sz):
-            new_h = max(sz[1], dp(60))
+            new_h = max(sz[1] + dp(10), dp(60))
             if new_h != w.height:
                 w.height = new_h
-                # Auto-scroll vers le bas après un petit délai
+                # Auto-scroll vers le bas (plus récent en bas)
                 Clock.schedule_once(
                     lambda d: setattr(self.scroll_texte, "scroll_y", 0),
-                    0.05)
+                    0.1)
 
+        self.scroll_texte.bind(width=_sync_largeur)
         self.lbl.bind(texture_size=_maj_hauteur)
-        self.lbl.bind(width=lambda w, val: setattr(w, "text_size", (val, None)))
         self.scroll_texte.add_widget(self.lbl)
         col.add_widget(self.scroll_texte)
 
@@ -974,12 +1010,12 @@ class JinxApp(App):
         fl.add_widget(col)
         # --- Bouton Clavier ---
         self.bt_clavier = Button(
-            text="Clavier",
-            font_size="13sp",
+            text="⌨",
+            font_size="24sp",
             size_hint=(None, None),
-            size=(dp(72), dp(44)),
+            size=(dp(52), dp(52)),
             background_normal="",
-            background_color=(0.35, 0.28, 0.12, 0.9),
+            background_color=(1, 1, 1, 0.1),
             color=(1, 0.93, 0.78, 1),
         )
         self.bt_clavier.bind(on_release=self._ouvrir_clavier)
@@ -987,21 +1023,21 @@ class JinxApp(App):
 
         # --- Bouton STOP (caché par défaut) ---
         self.bt_stop = Button(
-            text="STOP",
-            font_size="13sp",
+            text="■",
+            font_size="24sp",
             size_hint=(None, None),
-            size=(dp(72), dp(44)),
+            size=(dp(52), dp(52)),
             background_normal="",
-            background_color=(0.75, 0.15, 0.10, 0.9),
-            color=(1, 1, 1, 1),
+            background_color=(1, 1, 1, 0.1),
+            color=(1, 0.55, 0.35, 1),
             opacity=0,
         )
         self.bt_stop.bind(on_release=self._stopper_reflexion)
         fl.add_widget(self.bt_stop)
 
         # --- Positionner les boutons (bas droite, empilés) ---
-        self.bt_clavier.pos_hint = {"x": 0, "y": 0.06}
-        self.bt_stop.pos_hint = {"x": 0, "y": 0.14}
+        self.bt_clavier.pos_hint = {"x": 0.03, "y": 0.04}
+        self.bt_stop.pos_hint = {"x": 0.03, "y": 0.14}
 
         self.points = BoutonPoints(self.ouvrir_reglages, size_hint=(None, None),
                                    size=(dp(72), dp(72)),
@@ -1021,6 +1057,15 @@ class JinxApp(App):
         self.points.couleur = (r, g, b, 0.9)
         self.points.dessiner()
         self.lbl.font_size = sp(int(SET["texte"]))
+
+        # Couleur des boutons selon thème
+        if hasattr(self, "bt_clavier"):
+            self.bt_clavier.color = (r, g, b, 1)
+            self.bt_clavier.background_color = (r * 0.2, g * 0.2, b * 0.2, 0.6)
+        if hasattr(self, "bt_stop"):
+            # Rouge doux pour rester visible quel que soit le thème
+            self.bt_stop.color = (1, 0.5, 0.4, 1)
+            self.bt_stop.background_color = (0.4, 0.1, 0.05, 0.7)
 
         # Couleur du texte selon le thème
         self.lbl.color = (min(1, r * 0.95 + 0.1),
@@ -1175,22 +1220,8 @@ class JinxApp(App):
         global STOP_TTS
         STOP_TTS = True
         self.stop_requested = True
-        # Arrêter le TTS
-        try:
-            if platform == "android":
-                from jnius import autoclass
-                cls = autoclass("android.speech.tts.TextToSpeech")
-                # Récupérer l'instance si elle existe
-                t = tts_java()
-                if t:
-                    t.stop()
-        except Exception as e:
-            print("Stop TTS échoué:", e)
-        try:
-            from plyer import tts as plyer_tts
-            # plyer n'a pas de stop() universel, on ignore
-        except Exception:
-            pass
+        # Arrêter le TTS via le singleton
+        _stop_tts()
         self.bulle.set_etat("veille")
         self.etat_lbl.text = "Touche la bulle pour parler"
         self.lbl.text = "Arrêté."
@@ -1601,7 +1632,9 @@ class JinxApp(App):
             callback=_reponse,
             context={"memoire": ctx_mem, "exemples": exemples,
                      "temperature": SET.get("creativite", 0.3),
-                     "max_tokens": 400},
+                     "max_tokens": 400,
+                     "llm_fn": lambda q, c: demander_ia(
+                         q, (c.get("memoire", ""), c.get("exemples", [])))},
         )
 
 
