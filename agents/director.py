@@ -21,6 +21,8 @@ from .workers import (TimeAgent, MathAgent, DictionnaireAgent,
                       MemoryAgent, CodeAgent, EchoAgent)
 from .conversations import ConversationAgent, ConversationStore
 from .model_manager import ModelManager
+from .researcher import ResearcherAgent, WebCache
+from .system_agent import SystemAgent
 
 log = logging.getLogger("jinx.director")
 
@@ -170,6 +172,7 @@ class Director:
 def build_default_director(dossier: str,
                            model_manager: Optional[ModelManager] = None) -> Director:
     d = Director(model_manager=model_manager)
+    d.register(SystemAgent(dossier))
     d.register(TimeAgent(dossier))
     d.register(MathAgent(dossier))
     d.register(DictionnaireAgent(dossier))
