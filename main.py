@@ -46,6 +46,7 @@ from agents.panel import ouvrir_panneau_agents
 from agents.conversations import ConversationStore
 
 VERSION = "0.31"
+STOP_TTS = False
 URL = "http://127.0.0.1:8080/v1/chat/completions"
 PROC = None
 
@@ -356,6 +357,8 @@ def voix_disponibles():
 
 
 def parler_texte(texte, force=False):
+    global STOP_TTS
+    STOP_TTS = False
     if not (SET["voix_active"] or force):
         return
     if platform == "android":
@@ -941,13 +944,29 @@ class JinxApp(App):
         # --- Zone de texte défilante ---
         self.scroll_texte = ScrollView(
             do_scroll_x=False,
-            bar_width=dp(2),
+            do_scroll_y=True,
+            bar_width=dp(3),
+            bar_color=(1, 0.9, 0.7, 0.6),
+            bar_inactive_color=(1, 0.9, 0.7, 0.2),
             size_hint_y=None,
-            height=dp(180),
+            height=dp(200),
         )
-        self.lbl.size_hint_y = None
-        self.lbl.height = dp(180)
-        self.lbl.bind(texture_size=lambda w, sz: setattr(w, "height", max(sz[1], dp(60))))
+        # Le Label doit avoir une largeur fixe (= largeur scroll) et hauteur auto
+        self.lbl.size_hint = (1, None)
+        self.lbl.text_size = (Window.width - dp(30), None)
+        self.lbl.height = dp(60)
+
+        def _maj_hauteur(w, sz):
+            new_h = max(sz[1], dp(60))
+            if new_h != w.height:
+                w.height = new_h
+                # Auto-scroll vers le bas après un petit délai
+                Clock.schedule_once(
+                    lambda d: setattr(self.scroll_texte, "scroll_y", 0),
+                    0.05)
+
+        self.lbl.bind(texture_size=_maj_hauteur)
+        self.lbl.bind(width=lambda w, val: setattr(w, "text_size", (val, None)))
         self.scroll_texte.add_widget(self.lbl)
         col.add_widget(self.scroll_texte)
 
@@ -981,8 +1000,8 @@ class JinxApp(App):
         fl.add_widget(self.bt_stop)
 
         # --- Positionner les boutons (bas droite, empilés) ---
-        self.bt_clavier.pos_hint = {"right": 1, "y": 0.06}
-        self.bt_stop.pos_hint = {"right": 1, "y": 0.14}
+        self.bt_clavier.pos_hint = {"x": 0, "y": 0.06}
+        self.bt_stop.pos_hint = {"x": 0, "y": 0.14}
 
         self.points = BoutonPoints(self.ouvrir_reglages, size_hint=(None, None),
                                    size=(dp(72), dp(72)),
@@ -1152,8 +1171,26 @@ class JinxApp(App):
 
     # ---------------------------------------------------------- STOP
     def _stopper_reflexion(self, *a):
-        """Annule la requête en cours."""
+        """Annule la requête ET arrête la lecture vocale."""
+        global STOP_TTS
+        STOP_TTS = True
         self.stop_requested = True
+        # Arrêter le TTS
+        try:
+            if platform == "android":
+                from jnius import autoclass
+                cls = autoclass("android.speech.tts.TextToSpeech")
+                # Récupérer l'instance si elle existe
+                t = tts_java()
+                if t:
+                    t.stop()
+        except Exception as e:
+            print("Stop TTS échoué:", e)
+        try:
+            from plyer import tts as plyer_tts
+            # plyer n'a pas de stop() universel, on ignore
+        except Exception:
+            pass
         self.bulle.set_etat("veille")
         self.etat_lbl.text = "Touche la bulle pour parler"
         self.lbl.text = "Arrêté."

@@ -64,6 +64,14 @@ class SystemAgent(Agent):
 
     def match(self, query: str) -> float:
         q = sans_accents(query)
+        # Exclusions : ne pas intercepter les recherches web
+        exclusions = ["cherche sur internet", "recherche web", "va chercher",
+                      "apprends", "enrichis", "actualise", "wikipedia",
+                      "qui est", "c'est quoi la", "c'est quoi le",
+                      "raconte", "explique"]
+        for ex in exclusions:
+            if ex in q:
+                return 0.0
         for regex in (self._R_BATTERIE, self._R_WIFI, self._R_RAM,
                       self._R_STOCKAGE, self._R_ECRAN, self._R_AVION,
                       self._R_RESUME):
