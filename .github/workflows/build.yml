@@ -36,11 +36,10 @@ jobs:
     - name: Nettoyer la version précédente
       run: rm -rf .buildozer
 
-    - name: Cache de débogage keystore
-      uses: actions/cache@v4
-      with:
-        path: ~/.android/debug.keystore
-        key: debug-keystore-v1
+    - name: Restaurer le keystore
+      run: |
+        echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > jinx.keystore
+        ls -la jinx.keystore
 
     - name: Compiler llama-server (arm64)
       run: |
@@ -62,6 +61,9 @@ jobs:
         ls -lh libs/arm64-v8a
 
     - name: Construire avec Buildozer
+      env:
+        P4A_RELEASE_KEYSTORE_PASSWD: ${{ secrets.KEYSTORE_PASSWORD }}
+        P4A_RELEASE_KEYSTORE_ALIAS_PASSWD: ${{ secrets.KEY_PASSWORD }}
       run: buildozer -v android debug
 
     - name: Téléverser un APK

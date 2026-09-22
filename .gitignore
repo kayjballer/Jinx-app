@@ -28,3 +28,7 @@ dist/
 .DS_Store
 *.log
 nohup.out
+
+# Signature (fourni par GitHub Secrets)
+*.keystore
+*.keystore.base64
