@@ -1298,6 +1298,132 @@ class JinxApp(App):
             print(f"Fallback notif échoué : {e}")
         return False
 
+
+    def _demander_confirmation(self, agent, query, message):
+        """Affiche une modale pour confirmer une action critique."""
+        from kivy.uix.modalview import ModalView
+        from kivy.uix.boxlayout import BoxLayout
+        from kivy.uix.label import Label
+        from kivy.uix.button import Button
+
+        mv = ModalView(size_hint=(0.9, 0.4),
+                       background_color=(0.05, 0.04, 0.02, 0.98),
+                       auto_dismiss=False)
+        root = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(10))
+
+        root.add_widget(Label(
+            text="[b]Confirmation requise[/b]\n\n" + message,
+            markup=True, font_size="14sp",
+            halign="center", valign="middle"))
+        root.add_widget(Label(
+            text="« %s »" % query[:80],
+            font_size="12sp", color=(0.9, 0.75, 0.3, 1),
+            halign="center"))
+
+        btns = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(8))
+
+        def autoriser(*a):
+            mv.dismiss()
+            self.bulle.set_etat("reflexion")
+            self.etat_lbl.text = "Julie réfléchit..."
+            def _run():
+                rep = self.director.confirmer_action(agent, query)
+                def _aff(d):
+                    self.repondre(query, rep)
+                Clock.schedule_once(_aff, 0)
+            import threading
+            threading.Thread(target=_run, daemon=True).start()
+
+        def refuser(*a):
+            mv.dismiss()
+            self.repondre(query, "Action annulée.")
+
+        bt_oui = Button(text="Autoriser",
+                        background_color=(0.2, 0.55, 0.25, 1))
+        bt_non = Button(text="Refuser",
+                        background_color=(0.6, 0.2, 0.15, 1))
+        bt_oui.bind(on_release=autoriser)
+        bt_non.bind(on_release=refuser)
+        btns.add_widget(bt_oui)
+        btns.add_widget(bt_non)
+        root.add_widget(btns)
+
+        mv.add_widget(root)
+        mv.open()
+
+
+    def _voir_permissions(self, *a):
+        """Affiche la liste des agents et leur niveau de permission."""
+        from agents.permissions import Niveau
+        from kivy.uix.modalview import ModalView
+        from kivy.uix.scrollview import ScrollView
+        from kivy.uix.boxlayout import BoxLayout
+        from kivy.uix.label import Label
+        from kivy.uix.button import Button
+
+        if not getattr(self, "director", None) or not self.director.perms:
+            self.lbl.text = "Directeur non prêt."
+            return
+
+        perms = self.director.perms
+
+        mv = ModalView(size_hint=(0.94, 0.85),
+                       background_color=(0.04, 0.03, 0.02, 0.98))
+        root = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(8))
+
+        root.add_widget(Label(
+            text="[b]Permissions des agents[/b]",
+            markup=True, size_hint_y=None, height=dp(36),
+            font_size="16sp", color=(0.95, 0.75, 0.35, 1)))
+
+        legendes = Label(
+            text="🟢 Passif (lecture) · 🟡 Actif (annoncé) · 🔴 Critique (confirmation)",
+            font_size="11sp", size_hint_y=None, height=dp(28),
+            color=(0.8, 0.8, 0.8, 1))
+        root.add_widget(legendes)
+
+        sv = ScrollView()
+        liste = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6))
+        liste.bind(minimum_height=liste.setter("height"))
+
+        icones = {Niveau.PASSIF: "🟢", Niveau.ACTIF: "🟡", Niveau.CRITIQUE: "🔴"}
+        ordre = [Niveau.PASSIF, Niveau.ACTIF, Niveau.CRITIQUE]
+
+        for nom in sorted(self.director.agents.keys()):
+            niv = perms.niveau(nom)
+
+            row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+            lbl = Label(text="%s %s" % (icones.get(niv, "?"), nom),
+                        halign="left", valign="middle", font_size="13sp")
+            lbl.bind(size=lbl.setter("text_size"))
+            row.add_widget(lbl)
+
+            def changer(n=nom):
+                niveaux = ordre
+                i = niveaux.index(perms.niveau(n))
+                nouveau = niveaux[(i + 1) % 3]
+                perms.set_niveau(n, nouveau)
+                mv.dismiss()
+                self._voir_permissions()
+
+            bt = Button(text=niv.value.upper(),
+                        size_hint=(None, 1), width=dp(90),
+                        font_size="11sp",
+                        background_color=(0.3, 0.25, 0.12, 1))
+            bt.bind(on_release=lambda *a, n=nom: changer(n))
+            row.add_widget(bt)
+            liste.add_widget(row)
+
+        sv.add_widget(liste)
+        root.add_widget(sv)
+
+        bt_fer = Button(text="Fermer", size_hint_y=None, height=dp(48))
+        bt_fer.bind(on_release=lambda *a: mv.dismiss())
+        root.add_widget(bt_fer)
+
+        mv.add_widget(root)
+        mv.open()
+
     def touche_titre(self, w, touch):
         if w.collide_point(*touch.pos):
             self.ouvrir_reglages()
@@ -1444,6 +1570,17 @@ class JinxApp(App):
         def _reponse(rep):
             if self.stop_requested:
                 self.stop_requested = False
+                return
+            # Confirmation requise ?
+            if isinstance(rep, str) and rep.startswith("[JINX_CONFIRM]"):
+                try:
+                    contenu = rep.replace("[JINX_CONFIRM]", "", 1)
+                    agent, query, msg = contenu.split("|||", 2)
+                    Clock.schedule_once(
+                        lambda d: self._demander_confirmation(agent, query, msg),
+                        0)
+                except Exception as e:
+                    print("Erreur parsing CONFIRM:", e)
                 return
             if SET.get("historique"):
                 try:
@@ -1619,6 +1756,7 @@ class JinxApp(App):
         pleine("Voir les agents", _ouvrir_agents_v4)
         pleine("Telecharger les modeles", self._telecharger_manuel)
         pleine("Historique des conversations", self._ouvrir_historique)
+        pleine("Permissions des agents", self._voir_permissions)
 
         haut = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         haut.add_widget(Label(text="Paramètres", bold=True, font_size="20sp",

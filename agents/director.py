@@ -21,6 +21,7 @@ from .workers import (TimeAgent, MathAgent, DictionnaireAgent,
                       MemoryAgent, CodeAgent, EchoAgent)
 from .conversations import ConversationAgent, ConversationStore
 from .model_manager import ModelManager
+from .permissions import PermissionManager, Niveau, get_perms
 from .researcher import ResearcherAgent, WebCache
 from .system_agent import SystemAgent
 
@@ -45,6 +46,7 @@ class Director:
         self.history: List[Dict[str, Any]] = []
         self._lock = threading.Lock()
         self._conv_store = None
+        self.perms: Optional[PermissionManager] = None
 
     def register(self, agent: Agent) -> None:
         with self._lock:
@@ -81,7 +83,14 @@ class Director:
                 scores.append((s, name))
         scores.sort(reverse=True, key=lambda t: t[0])
         if scores:
-            return [scores[0][1]]
+            top = scores[0][1]
+            # Vérifier la permission
+            if self.perms:
+                peut, besoin_confirm, niv = self.perms.peut_executer(top)
+                if besoin_confirm:
+                    # On marque l'agent comme "à confirmer" via un préfixe
+                    return ["__CONFIRM__" + top]
+            return [top]
         return ["echo"]
 
     def _llm_pour(self, model_name: str, url: str):
@@ -119,11 +128,36 @@ class Director:
         except Exception as e:
             log.warning("log conv: %s", e)
 
+
+    def confirmer_action(self, agent: str, query: str,
+                         context: Optional[Dict[str, Any]] = None) -> str:
+        """Exécute une action critique APRÈS confirmation utilisateur."""
+        if agent not in self.agents:
+            return f"Agent {agent} inconnu."
+        try:
+            ctx = dict(context or {})
+            ctx["confirmed"] = True
+            return self.agents[agent].run(query, ctx)
+        except Exception as e:
+            log.exception("confirmer_action %s", agent)
+            return f"Erreur : {e}"
+
+    def niveau_agent(self, agent: str) -> str:
+        if not self.perms:
+            return "passif"
+        return self.perms.niveau(agent).value
+
     def handle(self, query: str, context: Optional[Dict[str, Any]] = None) -> str:
         context = dict(context or {})
         picked = self.select_agents(query)
         if not picked:
             return "Aucun agent."
+
+        # Cas spécial : action critique → demander confirmation
+        if picked and picked[0].startswith("__CONFIRM__"):
+            agent_name = picked[0].replace("__CONFIRM__", "")
+            # On retourne un marqueur que main.py va intercepter
+            return f"[JINX_CONFIRM]{agent_name}|||{query}|||Action sensible : {agent_name}"
         results: List[AgentResult] = []
         for name in picked:
             agent = self.agents[name]
@@ -180,4 +214,5 @@ def build_default_director(dossier: str,
     d.register(CodeAgent(dossier))
     d.register(ConversationAgent(dossier))
     d.register(EchoAgent(dossier))
+    d.perms = PermissionManager(dossier)
     return d
