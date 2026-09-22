@@ -921,6 +921,7 @@ class JinxApp(App):
         except Exception:
             pass
         self.occupe = False
+        self.stop_requested = False
         self.pret = False
         self.col = col = BoxLayout(orientation="vertical", padding=dp(12),
                                    spacing=dp(6))
@@ -935,10 +936,54 @@ class JinxApp(App):
                          valign="top", size_hint=(1, .30))
         self.lbl.bind(size=lambda w, s: setattr(w, "text_size", s))
         self.lbl.color = (1, 0.93, 0.78, 1)
-        for w in (self.titre, self.bulle, self.etat_lbl, self.lbl):
+        for w in (self.titre, self.bulle, self.etat_lbl):
             col.add_widget(w)
+        # --- Zone de texte défilante ---
+        self.scroll_texte = ScrollView(
+            do_scroll_x=False,
+            bar_width=dp(2),
+            size_hint_y=None,
+            height=dp(180),
+        )
+        self.lbl.size_hint_y = None
+        self.lbl.height = dp(180)
+        self.lbl.bind(texture_size=lambda w, sz: setattr(w, "height", max(sz[1], dp(60))))
+        self.scroll_texte.add_widget(self.lbl)
+        col.add_widget(self.scroll_texte)
+
         fl = FloatLayout()
         fl.add_widget(col)
+        # --- Bouton Clavier ---
+        self.bt_clavier = Button(
+            text="Clavier",
+            font_size="13sp",
+            size_hint=(None, None),
+            size=(dp(72), dp(44)),
+            background_normal="",
+            background_color=(0.35, 0.28, 0.12, 0.9),
+            color=(1, 0.93, 0.78, 1),
+        )
+        self.bt_clavier.bind(on_release=self._ouvrir_clavier)
+        fl.add_widget(self.bt_clavier)
+
+        # --- Bouton STOP (caché par défaut) ---
+        self.bt_stop = Button(
+            text="STOP",
+            font_size="13sp",
+            size_hint=(None, None),
+            size=(dp(72), dp(44)),
+            background_normal="",
+            background_color=(0.75, 0.15, 0.10, 0.9),
+            color=(1, 1, 1, 1),
+            opacity=0,
+        )
+        self.bt_stop.bind(on_release=self._stopper_reflexion)
+        fl.add_widget(self.bt_stop)
+
+        # --- Positionner les boutons (bas droite, empilés) ---
+        self.bt_clavier.pos_hint = {"right": 1, "y": 0.06}
+        self.bt_stop.pos_hint = {"right": 1, "y": 0.14}
+
         self.points = BoutonPoints(self.ouvrir_reglages, size_hint=(None, None),
                                    size=(dp(72), dp(72)),
                                    pos_hint={"right": 1, "y": 0.02})
@@ -957,6 +1002,11 @@ class JinxApp(App):
         self.points.couleur = (r, g, b, 0.9)
         self.points.dessiner()
         self.lbl.font_size = sp(int(SET["texte"]))
+
+        # Couleur du texte selon le thème
+        self.lbl.color = (min(1, r * 0.95 + 0.1),
+                          min(1, g * 0.95 + 0.1),
+                          min(1, b * 0.95 + 0.1), 1)
 
     def on_start(self):
         if platform == "android":
@@ -1099,6 +1149,118 @@ class JinxApp(App):
         mv.add_widget(root)
         mv.open()
 
+
+    # ---------------------------------------------------------- STOP
+    def _stopper_reflexion(self, *a):
+        """Annule la requête en cours."""
+        self.stop_requested = True
+        self.bulle.set_etat("veille")
+        self.etat_lbl.text = "Touche la bulle pour parler"
+        self.lbl.text = "Arrêté."
+        self.occupe = False
+        try:
+            if hasattr(self, "director") and self.director:
+                # Force la fin du thread
+                pass
+        except Exception:
+            pass
+
+    # ---------------------------------------------------------- Clavier
+    def _ouvrir_clavier(self, *a):
+        """Ouvre une modale pour taper du texte."""
+        from kivy.uix.modalview import ModalView
+        from kivy.uix.textinput import TextInput
+        from kivy.uix.boxlayout import BoxLayout
+        from kivy.uix.button import Button
+
+        mv = ModalView(size_hint=(0.95, 0.35),
+                       background_color=(0.05, 0.04, 0.02, 0.98),
+                       auto_dismiss=True)
+        root = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(8))
+
+        champ = TextInput(
+            hint_text="Tape ton message...",
+            multiline=False,
+            size_hint_y=None, height=dp(50),
+            font_size="15sp",
+            background_color=(0.15, 0.12, 0.08, 1),
+            foreground_color=(1, 1, 1, 1),
+            cursor_color=(0.95, 0.75, 0.35, 1),
+        )
+        root.add_widget(champ)
+
+        btns = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
+
+        def envoyer(*a):
+            texte = champ.text.strip()
+            if texte:
+                mv.dismiss()
+                self.envoyer(texte)
+
+        bt_envoi = Button(text="Envoyer", background_color=(0.4, 0.3, 0.1, 1))
+        bt_fermer = Button(text="Annuler", background_color=(0.25, 0.2, 0.15, 1))
+        bt_envoi.bind(on_release=envoyer)
+        bt_fermer.bind(on_release=lambda *a: mv.dismiss())
+
+        btns.add_widget(bt_envoi)
+        btns.add_widget(bt_fermer)
+        root.add_widget(btns)
+
+        mv.add_widget(root)
+        mv.open()
+        # Focus auto sur le champ + clavier
+        Clock.schedule_once(lambda d: setattr(champ, "focus", True), 0.2)
+
+
+    def notifier(self, titre, message):
+        """Affiche une notification Android."""
+        try:
+            if platform == "android":
+                from jnius import autoclass, cast
+                PythonActivity = autoclass("org.kivy.android.PythonActivity")
+                Context = autoclass("android.content.Context")
+                NotificationManager = autoclass("android.app.NotificationManager")
+                NotificationChannel = autoclass("android.app.NotificationChannel")
+                Notification = autoclass("android.app.Notification")
+                NotificationBuilder = autoclass("android.app.Notification$Builder")
+                Build = autoclass("android.os.Build")
+
+                activity = PythonActivity.mActivity
+                canal_id = "jinx_channel"
+
+                # Créer un canal (Android 8+)
+                if Build.VERSION.SDK_INT >= 26:
+                    channel = NotificationChannel(
+                        canal_id, "Jinx", NotificationManager.IMPORTANCE_DEFAULT)
+                    nm = cast(NotificationManager,
+                              activity.getSystemService(Context.NOTIFICATION_SERVICE))
+                    nm.createNotificationChannel(channel)
+
+                # Icone (utilise l'icône de l'app)
+                icon = activity.getApplicationInfo().icon
+                builder = NotificationBuilder(activity, canal_id)
+                builder.setContentTitle(titre)
+                builder.setContentText(message)
+                builder.setSmallIcon(icon)
+                builder.setAutoCancel(True)
+
+                nm = cast(NotificationManager,
+                          activity.getSystemService(Context.NOTIFICATION_SERVICE))
+                nm.notify(1, builder.build())
+                print(f"Notification envoyée : {titre} - {message}")
+                return True
+        except Exception as e:
+            print(f"Notification échouée : {e}")
+
+        # Fallback plyer
+        try:
+            from plyer import notification
+            notification.notify(title=titre, message=message, timeout=5)
+            return True
+        except Exception as e:
+            print(f"Fallback notif échoué : {e}")
+        return False
+
     def touche_titre(self, w, touch):
         if w.collide_point(*touch.pos):
             self.ouvrir_reglages()
@@ -1110,6 +1272,7 @@ class JinxApp(App):
         self.col.padding = [dp(12), dp(12) + haut, dp(12), dp(12) + bas]
         self.points.pos_hint = {"right": 1}
         self.points.y = bas + dp(16)
+
 
     def on_stop(self):
         if PROC is not None:
@@ -1213,6 +1376,8 @@ class JinxApp(App):
         self.envoyer(texte)
 
     def envoyer(self, texte):
+        if hasattr(self, "bt_stop"):
+            self.bt_stop.opacity = 1
         self.bulle.set_etat("reflexion")
         self.etat_lbl.text = "Je reflechis..."
         self.lbl.text = "Toi : %s" % texte
@@ -1220,6 +1385,7 @@ class JinxApp(App):
                          daemon=True).start()
 
     def penser(self, texte):
+        self.stop_requested = False
         dossier = self.user_data_dir
 
         # 1) Commandes memoire locales rapides
@@ -1239,6 +1405,9 @@ class JinxApp(App):
 
         # 3) Callback final
         def _reponse(rep):
+            if self.stop_requested:
+                self.stop_requested = False
+                return
             if SET.get("historique"):
                 try:
                     enregistrer(dossier, texte, rep)
@@ -1263,6 +1432,8 @@ class JinxApp(App):
 
 
     def repondre(self, texte, rep):
+        if hasattr(self, "bt_stop"):
+            self.bt_stop.opacity = 0
         self.bulle.set_etat("parle")
         self.etat_lbl.text = "Jinx parle..."
         self.lbl.text = "Toi : %s\n\nJinx : %s" % (texte, rep)
