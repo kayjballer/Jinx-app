@@ -123,19 +123,36 @@ class JinxCore:
 
     def _wifi_android(self) -> Dict[str, Any]:
         try:
-            WifiManager = self.autoclass("android.net.wifi.WifiManager")
+            ConnectivityManager = self.autoclass("android.net.ConnectivityManager")
+            NetworkCapabilities = self.autoclass("android.net.NetworkCapabilities")
             activity = self.PythonActivity.mActivity
-            wm = activity.getSystemService(self.Context.WIFI_SERVICE)
-            actif = wm.isWifiEnabled()
-            info = wm.getConnectionInfo() if actif else None
+            cm = activity.getSystemService(self.Context.CONNECTIVITY_SERVICE)
+            network = cm.getActiveNetwork()
+            if not network:
+                return {"actif": False, "connecte": False, "ssid": ""}
+            caps = cm.getNetworkCapabilities(network)
+            if not caps:
+                return {"actif": False, "connecte": False, "ssid": ""}
+            connected = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            is_wifi = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+            is_cell = caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+            # SSID via WifiManager (peut échouer sans localisation)
             ssid = ""
-            if info:
-                ssid = info.getSSID() or ""
-                ssid = ssid.strip('"')
+            try:
+                WifiManager = self.autoclass("android.net.wifi.WifiManager")
+                wm = activity.getSystemService(self.Context.WIFI_SERVICE)
+                info = wm.getConnectionInfo()
+                if info:
+                    ssid = (info.getSSID() or "").strip('"')
+                    if ssid == "<unknown ssid>":
+                        ssid = ""
+            except Exception:
+                pass
             return {
-                "actif": bool(actif),
-                "connecte": bool(actif and ssid and ssid != "<unknown ssid>"),
+                "actif": bool(is_wifi or is_cell),
+                "connecte": bool(connected),
                 "ssid": ssid,
+                "type": "wifi" if is_wifi else ("cell" if is_cell else "autre"),
             }
         except Exception as e:
             log.warning("wifi_android: %s", e)
@@ -160,14 +177,16 @@ class JinxCore:
         """Retourne {total_mo, libre_mo, utilise_pct}."""
         try:
             if self.android:
-                Runtime = self.autoclass("java.lang.Runtime")
-                rt = Runtime.getRuntime()
-                total = rt.totalMemory() / (1024 * 1024)
-                libre = rt.freeMemory() / (1024 * 1024)
-                # maxMemory = limite JVM
-                maxi = rt.maxMemory() / (1024 * 1024)
-                pct = 100 * (1 - libre / maxi) if maxi > 0 else -1
-                return {"total_mo": round(maxi, 1),
+                ActivityManager = self.autoclass("android.app.ActivityManager")
+                MemoryInfo = self.autoclass("android.app.ActivityManager$MemoryInfo")
+                activity = self.PythonActivity.mActivity
+                am = activity.getSystemService(self.Context.ACTIVITY_SERVICE)
+                mi = MemoryInfo()
+                am.getMemoryInfo(mi)
+                total = mi.totalMem / (1024 * 1024)
+                libre = mi.availMem / (1024 * 1024)
+                pct = 100 * (1 - libre / total) if total > 0 else -1
+                return {"total_mo": round(total, 1),
                         "libre_mo": round(libre, 1),
                         "utilise_pct": round(pct, 1)}
         except Exception as e:

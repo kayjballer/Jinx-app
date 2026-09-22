@@ -132,14 +132,17 @@ class SystemAgent(Agent):
         w = self.core.wifi()
         if self.core.mode_avion():
             return "Tu es en mode avion, donc pas de connexion."
-        if not w["actif"]:
-            return "Le WiFi est désactivé. Tu es peut-être sur données mobiles."
-        if w["connecte"]:
-            ssid = w["ssid"]
-            if ssid and ssid != "<unknown ssid>":
+        if not w["connecte"]:
+            return "Pas de connexion internet pour l'instant."
+        type_reseau = w.get("type", "")
+        ssid = w.get("ssid", "")
+        if type_reseau == "wifi":
+            if ssid:
                 return f"Oui, connecté au WiFi « {ssid} »."
-            return "Oui, le WiFi est activé et connecté."
-        return "Le WiFi est activé mais tu n'es connecté à aucun réseau."
+            return "Oui, tu es connecté en WiFi."
+        if type_reseau == "cell":
+            return "Oui, tu es connecté en données mobiles."
+        return "Oui, tu es connecté à internet."
 
     def _reponse_ram(self) -> str:
         r = self.core.ram()
@@ -183,12 +186,17 @@ class SystemAgent(Agent):
             etat = "en charge" if b["en_charge"] else "sur batterie"
             lignes.append(f"• Batterie : {b['niveau']}% ({etat})")
         if w["connecte"]:
-            ssid = w["ssid"] if w["ssid"] != "<unknown ssid>" else "?"
-            lignes.append(f"• WiFi : connecté ({ssid})")
-        elif w["actif"]:
-            lignes.append("• WiFi : activé, non connecté")
+            type_reseau = w.get("type", "")
+            if type_reseau == "wifi":
+                ssid = w.get("ssid", "")
+                label = f"WiFi{f' ({ssid})' if ssid else ''}"
+            elif type_reseau == "cell":
+                label = "données mobiles"
+            else:
+                label = "connecté"
+            lignes.append(f"• Réseau : {label}")
         else:
-            lignes.append("• WiFi : désactivé")
+            lignes.append("• Réseau : déconnecté")
         if r["total_mo"] > 0:
             lignes.append(f"• RAM : {r['libre_mo']:.0f} Mo libres "
                           f"({r['utilise_pct']:.0f}% utilisée)")
