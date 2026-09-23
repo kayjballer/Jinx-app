@@ -1,7 +1,6 @@
-
 """
-agents/bulle2d.py — Bulle Jarvis 2D (radar animé ultra-léger).
-API identique à l'ancienne Bulle 3D : set_etat, set_fps, rayon, couleur, halo.
+agents/bulle2d.py — Bulle Jarvis "trou noir" : plasma fluide tourbillonnant.
+Inspiré de Interstellar + Arc reactor.
 """
 from __future__ import annotations
 
@@ -13,95 +12,94 @@ from kivy.uix.widget import Widget
 
 
 class Bulle2D(Widget):
-    """Radar Jarvis : 3 anneaux + particules + ondes. ~5% CPU."""
+    """Trou noir central + plasma doré fluide. 4 états."""
 
     def __init__(self, on_tap=None, **kw):
         super().__init__(**kw)
         self.on_tap = on_tap
         self.etat = "veille"
-        self.couleur = (1, 0.6, 0.2, 1)
+        self.couleur = (1, 0.55, 0.15, 1)
         self.halo = 1.0
-        self.theme = "or"
         self.t = 0.0
-        self.fps_cible = 30
         self._event = None
 
-        self.anneaux_cfg = [
-            {"r": 0.46, "vit":  0.35, "nb": 3, "ep": 2.5, "alpha": 0.85},
-            {"r": 0.34, "vit": -0.55, "nb": 4, "ep": 2.0, "alpha": 0.65},
-            {"r": 0.22, "vit":  0.90, "nb": 2, "ep": 1.8, "alpha": 0.55},
-        ]
+        # Particules organisées en 6 bras spiraux fluides
+        self.particules = []
+        NB_BRAS = 6
+        NB_PAR_BRAS = 16
+        for b in range(NB_BRAS):
+            angle_bras = (b / NB_BRAS) * 2 * math.pi
+            for j in range(NB_PAR_BRAS):
+                t_param = j / (NB_PAR_BRAS - 1)  # 0=intérieur, 1=extérieur
+                r_base = 0.24 + t_param * 0.75
+                self.particules.append({
+                    "angle": angle_bras + t_param * 1.3,
+                    "r": r_base,
+                    "vit": 0.6 + (1.0 - t_param) * 2.2,
+                    "taille": 1.8 + (1.0 - t_param) * 3.8,
+                    "alpha_base": 0.25 + (1.0 - t_param) * 0.75,
+                    "phase": random.uniform(0, 2 * math.pi),
+                    "pulse": random.uniform(0.8, 2.5),
+                    "wobble": random.uniform(0.015, 0.04),
+                })
 
-        self.particules = [{
-            "angle": random.uniform(0, 360),
-            "r":     random.uniform(0.40, 0.48),
-            "vit":   random.uniform(0.4, 1.5) * random.choice([-1, 1]),
-            "taille": random.uniform(1.5, 3.0),
-        } for _ in range(18)]
-
-        self.ondes = []
-        self._event = None
         self._construire()
         self.set_fps(30)
 
     def _construire(self):
         self.canvas.clear()
         self.g_colors = []
-        self.g_halo = []
-        self.g_anneaux = []
+        self.g_halos = []
         self.g_particules = []
-        self.g_ondes = []
-        self.g_coeur = None
-        self.g_bright = None
+        self.g_disk = []
+        self.g_black = None
+        self.g_ring = None
+        self.g_core = None
 
         with self.canvas:
-            for i in range(3):
-                c = Color(1, 0.6, 0.2, 0.06)
+            # Halos extérieurs (grands flous)
+            for i in range(4):
+                c = Color(1, 0.5, 0.15, 0.05)
                 self.g_colors.append(c)
                 e = Ellipse(pos=(0, 0), size=(1, 1))
-                self.g_halo.append(e)
+                self.g_halos.append(e)
 
-            for cfg in self.anneaux_cfg:
-                arcs = []
-                for _ in range(cfg["nb"]):
-                    c = Color(1, 0.6, 0.2, cfg["alpha"])
-                    self.g_colors.append(c)
-                    line = Line(circle=(0, 0, 1, 0, 60), width=cfg["ep"])
-                    arcs.append(line)
-                self.g_anneaux.append(arcs)
-
+            # Plasma fluide (particules)
             for _ in self.particules:
-                c = Color(1, 1, 1, 0.9)
+                c = Color(1, 0.5, 0.15, 0.5)
                 self.g_colors.append(c)
                 e = Ellipse(pos=(0, 0), size=(2, 2))
                 self.g_particules.append(e)
 
-            for _ in range(6):
-                c = Color(1, 1, 1, 0)
+            # Disque d'accrétion (3 arcs épais)
+            for i in range(3):
+                c = Color(1, 0.6, 0.2, 0.9)
                 self.g_colors.append(c)
-                line = Line(circle=(0, 0, 1), width=1.5)
-                self.g_ondes.append(line)
+                arc = Line(circle=(0, 0, 1, 0, 120), width=3 + i * 2)
+                self.g_disk.append(arc)
 
-            c = Color(1, 0.6, 0.2, 1)
+            # Anneau de photon (fin, très lumineux)
+            c = Color(1, 0.9, 0.5, 1)
             self.g_colors.append(c)
-            self.g_coeur = Ellipse(pos=(0, 0), size=(10, 10))
+            self.g_ring = Line(circle=(0, 0, 1), width=2)
 
-            c = Color(1, 1, 1, 0.95)
+            # Trou noir (cercle noir)
+            c = Color(0, 0, 0, 1)
             self.g_colors.append(c)
-            self.g_bright = Ellipse(pos=(0, 0), size=(5, 5))
+            self.g_black = Ellipse(pos=(0, 0), size=(1, 1))
+
+            # Cœur ultra-brillant
+            c = Color(1, 0.95, 0.7, 0.9)
+            self.g_colors.append(c)
+            self.g_core = Ellipse(pos=(0, 0), size=(2, 2))
 
     def set_fps(self, fps: int):
-        self.fps_cible = fps
         if self._event:
             self._event.cancel()
         self._event = Clock.schedule_interval(self.maj, 1.0 / max(1, fps))
 
     def set_etat(self, e: str):
-        if e == self.etat:
-            return
         self.etat = e
-        if e == "parle":
-            self.ondes.append({"r": 0.15, "alpha": 0.9})
 
     def rayon(self) -> float:
         return min(self.width, self.height) / 2.0 * 0.92
@@ -128,85 +126,75 @@ class Bulle2D(Widget):
 
         e = self.etat
         if e == "veille":
-            vitesse, intensite = 0.5, 0.6
-            puls = 1.0 + math.sin(self.t * 1.5) * 0.03
+            vitesse, intensite = 0.4, 0.55
+            puls = 1.0 + math.sin(self.t * 1.2) * 0.04
         elif e == "ecoute":
-            vitesse, intensite = 1.6, 1.0
-            puls = 1.0 + math.sin(self.t * 4.5) * 0.08
+            vitesse, intensite = 1.8, 1.0
+            puls = 1.0 + math.sin(self.t * 4.0) * 0.06
         elif e == "reflexion":
-            vitesse, intensite = 2.6, 1.0
-            puls = 1.0 + math.sin(self.t * 6.0) * 0.05
+            vitesse, intensite = 3.0, 1.0
+            puls = 1.0 + math.sin(self.t * 7.0) * 0.04
         elif e == "parle":
-            vitesse, intensite = 1.1, 1.0
-            puls = 1.0 + math.sin(self.t * 8.0) * 0.12
+            vitesse, intensite = 1.2, 1.0
+            puls = 1.0 + math.sin(self.t * 9.0) * 0.10
         else:
             vitesse, intensite = 1.0, 1.0
             puls = 1.0
 
-        r0, g0, b0, a0 = self.couleur
+        r0, g0, b0, _ = self.couleur
         halo_f = max(0.0, min(2.0, float(self.halo)))
+        ci = 0
 
-        for i, ell in enumerate(self.g_halo):
-            hr = R * (0.35 + i * 0.18) * puls
+        # ===== HALOS =====
+        for i, ell in enumerate(self.g_halos):
+            hr = R * (0.55 + i * 0.13) * puls
             ell.size = (hr * 2, hr * 2)
             ell.pos = (cx - hr, cy - hr)
-        for i in range(3):
-            base_a = 0.08 - i * 0.022
-            self.g_colors[i].rgba = (r0, g0, b0, base_a * intensite * halo_f)
+            self.g_colors[ci].rgba = (
+                r0, g0 * 0.9, b0 * 0.8, (0.11 - i * 0.02) * intensite * halo_f)
+            ci += 1
 
-        color_idx = 3
-        for idx, cfg in enumerate(self.anneaux_cfg):
-            r_anneau = R * cfg["r"] * puls
-            angle_base = (self.t * cfg["vit"] * 60 * vitesse) % 360
-            for j, arc in enumerate(self.g_anneaux[idx]):
-                start = angle_base + j * (360.0 / cfg["nb"])
-                end = start + 70.0
-                arc.circle = (cx, cy, r_anneau, start, end)
-                self.g_colors[color_idx].rgba = (
-                    r0, g0, b0, cfg["alpha"] * intensite * halo_f)
-                color_idx += 1
-
+        # ===== PLASMA (particules fluides) =====
         for i, p in enumerate(self.particules):
-            p["angle"] = (p["angle"] + p["vit"] * 60 * dt * vitesse) % 360
-            rad = math.radians(p["angle"])
-            px = cx + math.cos(rad) * R * p["r"] * puls
-            py = cy + math.sin(rad) * R * p["r"] * puls
-            tt = p["taille"]
+            p["angle"] = (p["angle"] + p["vit"] * dt * vitesse * 0.6) % (2 * math.pi)
+            wobble = math.sin(self.t * 1.5 + p["phase"]) * p["wobble"]
+            r_eff = max(0.05, p["r"] + wobble)
+            px = cx + math.cos(p["angle"]) * R * r_eff * puls
+            py = cy + math.sin(p["angle"]) * R * r_eff * puls
+            taille = p["taille"] * (0.85 + math.sin(self.t * p["pulse"] + p["phase"]) * 0.15)
             g = self.g_particules[i]
-            g.size = (tt * 2, tt * 2)
-            g.pos = (px - tt, py - tt)
-            self.g_colors[color_idx].rgba = (1, 1, 1, 0.9 * intensite)
-            color_idx += 1
+            g.size = (taille * 2, taille * 2)
+            g.pos = (px - taille, py - taille)
+            alpha = p["alpha_base"] * intensite * halo_f
+            if p["r"] < 0.4:
+                alpha = min(1.0, alpha * 1.6)
+            self.g_colors[ci].rgba = (
+                min(1.0, r0 * 1.1), g0 * 0.85, b0 * 0.7, alpha)
+            ci += 1
 
-        if e == "parle" and random.random() < 0.10:
-            self.ondes.append({"r": 0.15, "alpha": 0.9})
+        # ===== DISQUE D'ACCRÉTION =====
+        disk_radius = R * 0.28 * puls
+        for i, arc in enumerate(self.g_disk):
+            offset = (self.t * (1.5 + i * 0.3) * vitesse * 40) % 360
+            arc.circle = (cx, cy, disk_radius + i * 3, offset, offset + 120)
+            self.g_colors[ci].rgba = (1, 0.75, 0.35, (0.9 - i * 0.15) * intensite)
+            ci += 1
 
-        vivantes = []
-        for ond in self.ondes:
-            ond["r"] += dt * 0.7
-            ond["alpha"] -= dt * 1.1
-            if ond["alpha"] > 0.02 and ond["r"] < 0.95:
-                vivantes.append(ond)
-        self.ondes = vivantes
+        # ===== ANNEAU DE PHOTON =====
+        ring_r = R * 0.22 * puls
+        self.g_ring.circle = (cx, cy, ring_r)
+        self.g_colors[ci].rgba = (1, 0.95, 0.6, intensite)
+        ci += 1
 
-        for i, line in enumerate(self.g_ondes):
-            if i < len(self.ondes):
-                ond = self.ondes[i]
-                rr = R * ond["r"]
-                line.circle = (cx, cy, rr)
-                self.g_colors[color_idx].rgba = (r0, g0, b0, ond["alpha"])
-            else:
-                line.circle = (cx, cy, 1)
-                self.g_colors[color_idx].rgba = (r0, g0, b0, 0)
-            color_idx += 1
+        # ===== TROU NOIR =====
+        black_r = R * 0.18 * puls
+        self.g_black.size = (black_r * 2, black_r * 2)
+        self.g_black.pos = (cx - black_r, cy - black_r)
+        self.g_colors[ci].rgba = (0, 0, 0, 1)
+        ci += 1
 
-        coeur_r = R * 0.13 * puls
-        self.g_coeur.size = (coeur_r * 2, coeur_r * 2)
-        self.g_coeur.pos = (cx - coeur_r, cy - coeur_r)
-        self.g_colors[color_idx].rgba = (r0, g0, b0, intensite)
-        color_idx += 1
-
-        bright_r = R * 0.06 * puls
-        self.g_bright.size = (bright_r * 2, bright_r * 2)
-        self.g_bright.pos = (cx - bright_r, cy - bright_r)
-        self.g_colors[color_idx].rgba = (1, 1, 1, 0.95 * intensite)
+        # ===== CŒUR =====
+        core_r = R * 0.015 * puls
+        self.g_core.size = (core_r * 2, core_r * 2)
+        self.g_core.pos = (cx - core_r, cy - core_r)
+        self.g_colors[ci].rgba = (1, 0.95, 0.7, intensite * 0.8)
