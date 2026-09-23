@@ -10,13 +10,14 @@ android.archs = arm64-v8a
 android.add_libs_arm64_v8a = libs/arm64-v8a/*.so
 orientation = portrait
 fullscreen = 0
+p4a.branch = develop
 android.permissions = RECORD_AUDIO,INTERNET,ACCESS_NETWORK_STATE,POST_NOTIFICATIONS,VIBRATE,SET_ALARM,MODIFY_AUDIO_SETTINGS,BLUETOOTH,BLUETOOTH_ADMIN,WRITE_SETTINGS,READ_CALENDAR,WRITE_CALENDAR
 android.debug_artifact = jinx-debug.apk
 android.keystore = jinx.keystore
 android.keyalias = jinx
 android.api = 33
 android.minapi = 21
-android.ndk = 25b
+android.ndk = 27b
 android.accept_sdk_license = True
 
 [buildozer]

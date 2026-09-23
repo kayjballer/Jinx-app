@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
     steps:
     - uses: actions/checkout@v4
 
@@ -22,17 +24,36 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: Installer les dépendances système
+    - name: Installer les dépendances système (g++ + ccache)
       run: |
         sudo apt update
-        sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf automake libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev
+        sudo apt install -y \
+          git zip unzip openjdk-17-jdk python3-pip python3-venv \
+          autoconf automake libtool pkg-config \
+          zlib1g-dev libncurses5-dev libncursesw5-dev \
+          cmake libffi-dev libssl-dev \
+          g++ gcc make ccache
+
+    - name: Diagnostiquer l'environnement
+      run: |
+        echo "=== RAM ==="
+        free -h
+        echo "=== Disque ==="
+        df -h
+        echo "=== g++ version ==="
+        g++ --version || echo "g++ MANQUANT"
+        echo "=== ccache version ==="
+        ccache --version || echo "ccache MANQUANT"
 
     - name: Installer Buildozer
-      run: pip install --upgrade buildozer cython
+      run: |
+        pip install --upgrade pip setuptools wheel
+        pip install --upgrade buildozer "cython<3.0"
+        buildozer --version
 
     - name: Accepter les licences du SDK Android
       run: |
-        timeout 300 bash -c 'yes | buildozer android update' || true
+        echo "y" | buildozer android update || true
 
     - name: Nettoyer la version précédente
       run: rm -rf .buildozer
@@ -62,19 +83,24 @@ jobs:
         ls -lh libs/arm64-v8a
 
     - name: Construire avec Buildozer
+      env:
+        MAKEFLAGS: "-j1"
+        USE_CCACHE: "1"
+        CCACHE_DIR: ${{ github.workspace }}/.ccache
+        P4A_RELEASE_KEYSTORE: ${{ github.workspace }}/jinx.keystore
+        P4A_RELEASE_KEYSTORE_PASSWD: ${{ secrets.KEYSTORE_PASSWORD }}
+        P4A_RELEASE_KEYALIAS: ${{ secrets.KEY_ALIAS }}
+        P4A_RELEASE_KEYALIAS_PASSWD: ${{ secrets.KEY_PASSWORD }}
       run: |
         set -o pipefail
+        # Réduire la conso RAM : -j1
         buildozer -v android debug > /tmp/build.log 2>&1 || true
-        echo "=== 80 DERNIÈRES LIGNES ==="
-        tail -80 /tmp/build.log
-
-    - name: Extraire les erreurs
-      if: always()
-      run: |
+        echo "=== 100 DERNIÈRES LIGNES ==="
+        tail -100 /tmp/build.log
         echo "=== RECHERCHE ERREURS ==="
-        grep -n -i -E "error:|failed|fatal|BUILD FAILED|STOPPED|Permission denied|No such file|Traceback" /tmp/build.log | tail -40 || echo "Aucune erreur détectée"
+        grep -n -i -E "error:|failed|fatal|BUILD FAILED|STOPPED|killed|Traceback|No such" /tmp/build.log | tail -30 || echo "Aucune erreur détectée"
 
-    - name: Upload log
+    - name: Upload log complet
       if: always()
       uses: actions/upload-artifact@v4
       with:
@@ -82,34 +108,24 @@ jobs:
         path: /tmp/build.log
         if-no-files-found: ignore
 
-    - name: Vérifier la présence de l'APK
+    - name: Vérifier l'APK
       id: check_apk
       run: |
-        echo "=== Contenu de bin/ ==="
         ls -la bin/ || echo "bin/ n'existe pas"
         if ls bin/*.apk 1>/dev/null 2>&1; then
           echo "apk_existe=true" >> $GITHUB_OUTPUT
-          echo "APK trouvée !"
         else
           echo "apk_existe=false" >> $GITHUB_OUTPUT
-          echo "PAS d'APK"
         fi
 
     - name: Re-signer avec notre keystore
       if: steps.check_apk.outputs.apk_existe == 'true'
       run: |
-        # Trouver apksigner
         BUILD_TOOLS=$(ls -d ${ANDROID_HOME}/build-tools/*/ 2>/dev/null | sort -V | tail -1)
         APKSIGNER="${BUILD_TOOLS}apksigner"
-        echo "apksigner: $APKSIGNER"
-        
+        ZIPALIGN=$(ls -d ${ANDROID_HOME}/build-tools/*/zipalign 2>/dev/null | sort -V | tail -1)
         for APK in bin/*.apk; do
-          echo "=== Re-signature : $APK ==="
-          # Retirer signature existante
-          ZIPALIGN=$(ls -d ${ANDROID_HOME}/build-tools/*/zipalign 2>/dev/null | sort -V | tail -1)
           $ZIPALIGN -f -p 4 "$APK" "${APK}.aligned"
-          
-          # Signer avec notre keystore
           $APKSIGNER sign --ks jinx.keystore \
             --ks-pass "pass:${{ secrets.KEYSTORE_PASSWORD }}" \
             --key-pass "pass:${{ secrets.KEY_PASSWORD }}" \
@@ -117,11 +133,7 @@ jobs:
             --v1-signing-enabled true \
             --v2-signing-enabled true \
             "${APK}.aligned"
-          
           mv "${APK}.aligned" "$APK"
-          
-          # Vérifier la signature
-          echo "=== Vérification signature ==="
           $APKSIGNER verify -v "$APK" || true
         done
 
