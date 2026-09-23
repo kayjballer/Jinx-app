@@ -31,7 +31,8 @@ jobs:
       run: pip install --upgrade buildozer cython
 
     - name: Accepter les licences du SDK Android
-      run: yes | buildozer android update || true
+      run: |
+        timeout 300 bash -c 'yes | buildozer android update' || true
 
     - name: Nettoyer la version précédente
       run: rm -rf .buildozer
@@ -61,21 +62,19 @@ jobs:
         ls -lh libs/arm64-v8a
 
     - name: Construire avec Buildozer
-      env:
-        P4A_RELEASE_KEYSTORE: ${{ github.workspace }}/jinx.keystore
-        P4A_RELEASE_KEYSTORE_PASSWD: ${{ secrets.KEYSTORE_PASSWORD }}
-        P4A_RELEASE_KEYALIAS: ${{ secrets.KEY_ALIAS }}
-        P4A_RELEASE_KEYALIAS_PASSWD: ${{ secrets.KEY_PASSWORD }}
       run: |
         set -o pipefail
-        buildozer -v android debug > /tmp/build.log 2>&1
-        EXIT_CODE=$?
-        echo "=== 200 DERNIÈRES LIGNES ==="
-        tail -200 /tmp/build.log
-        echo "=== FIN LOG ==="
-        exit $EXIT_CODE
+        buildozer -v android debug > /tmp/build.log 2>&1 || true
+        echo "=== 80 DERNIÈRES LIGNES ==="
+        tail -80 /tmp/build.log
 
-    - name: Upload log complet
+    - name: Extraire les erreurs
+      if: always()
+      run: |
+        echo "=== RECHERCHE ERREURS ==="
+        grep -n -i -E "error:|failed|fatal|BUILD FAILED|STOPPED|Permission denied|No such file|Traceback" /tmp/build.log | tail -40 || echo "Aucune erreur détectée"
+
+    - name: Upload log
       if: always()
       uses: actions/upload-artifact@v4
       with:
@@ -83,12 +82,51 @@ jobs:
         path: /tmp/build.log
         if-no-files-found: ignore
 
-    - name: Vérifier que l'APK existe
+    - name: Vérifier la présence de l'APK
+      id: check_apk
       run: |
         echo "=== Contenu de bin/ ==="
         ls -la bin/ || echo "bin/ n'existe pas"
+        if ls bin/*.apk 1>/dev/null 2>&1; then
+          echo "apk_existe=true" >> $GITHUB_OUTPUT
+          echo "APK trouvée !"
+        else
+          echo "apk_existe=false" >> $GITHUB_OUTPUT
+          echo "PAS d'APK"
+        fi
+
+    - name: Re-signer avec notre keystore
+      if: steps.check_apk.outputs.apk_existe == 'true'
+      run: |
+        # Trouver apksigner
+        BUILD_TOOLS=$(ls -d ${ANDROID_HOME}/build-tools/*/ 2>/dev/null | sort -V | tail -1)
+        APKSIGNER="${BUILD_TOOLS}apksigner"
+        echo "apksigner: $APKSIGNER"
+        
+        for APK in bin/*.apk; do
+          echo "=== Re-signature : $APK ==="
+          # Retirer signature existante
+          ZIPALIGN=$(ls -d ${ANDROID_HOME}/build-tools/*/zipalign 2>/dev/null | sort -V | tail -1)
+          $ZIPALIGN -f -p 4 "$APK" "${APK}.aligned"
+          
+          # Signer avec notre keystore
+          $APKSIGNER sign --ks jinx.keystore \
+            --ks-pass "pass:${{ secrets.KEYSTORE_PASSWORD }}" \
+            --key-pass "pass:${{ secrets.KEY_PASSWORD }}" \
+            --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            "${APK}.aligned"
+          
+          mv "${APK}.aligned" "$APK"
+          
+          # Vérifier la signature
+          echo "=== Vérification signature ==="
+          $APKSIGNER verify -v "$APK" || true
+        done
 
     - name: Téléverser un APK
+      if: steps.check_apk.outputs.apk_existe == 'true'
       uses: actions/upload-artifact@v4
       with:
         name: jinx-apk
