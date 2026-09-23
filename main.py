@@ -963,7 +963,13 @@ class JinxApp(App):
         self.titre = Label(text="J.I.N.X", font_size="22sp", bold=True,
                            color=(1, 0.75, 0.25, 1), size_hint=(1, .07))
         self.titre.bind(on_touch_down=self.touche_titre)
-        self.bulle = Bulle2D(self.ecouter, size_hint=(1, .56))
+        try:
+            self.bulle = Bulle2D(self.ecouter, size_hint=(1, .56))
+        except Exception as _e_bulle:
+            print("Bulle2D crash, fallback:", _e_bulle)
+            from kivy.uix.widget import Widget as _W
+            self.bulle = _W(size_hint=(1, .56))
+        # BULLE_SAFE
         self.etat_lbl = Label(text="Touche la bulle pour parler",
                               font_size="14sp", color=(0.85, 0.65, 0.30, 1),
                               size_hint=(1, .07))
