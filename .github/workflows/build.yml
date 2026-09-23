@@ -39,6 +39,7 @@ jobs:
     - name: Restaurer le keystore
       run: |
         echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > jinx.keystore
+        chmod 600 jinx.keystore
         ls -la jinx.keystore
 
     - name: Compiler llama-server (arm64)
@@ -52,26 +53,24 @@ jobs:
           -DGGML_OPENMP=OFF -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF \
           -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
           -DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_TOOLS=ON \
-          -DGGML_CPU_ARM_ARCH=armv8-a \
-          -DGGML_NATIVE=OFF
+          -DGGML_CPU_ARM_ARCH=armv8-a -DGGML_NATIVE=OFF
         cmake --build /tmp/llama-build --target llama-server -j4
         mkdir -p libs/arm64-v8a
         cp /tmp/llama-build/bin/llama-server libs/arm64-v8a/libllama_server.so
         chmod +x libs/arm64-v8a/libllama_server.so
         ls -lh libs/arm64-v8a
 
-    - name: Construire avec Buildozer
+    - name: Construire avec Buildozer (debug)
       env:
         P4A_RELEASE_KEYSTORE: ${{ github.workspace }}/jinx.keystore
         P4A_RELEASE_KEYSTORE_PASSWD: ${{ secrets.KEYSTORE_PASSWORD }}
         P4A_RELEASE_KEYALIAS: ${{ secrets.KEY_ALIAS }}
         P4A_RELEASE_KEYALIAS_PASSWD: ${{ secrets.KEY_PASSWORD }}
       run: |
-        chmod 600 jinx.keystore
-        echo "Keystore: $P4A_RELEASE_KEYSTORE"
-        echo "Alias: $P4A_RELEASE_KEYALIAS"
-        ls -la jinx.keystore
-        buildozer -v android release
+        export P4A_RELEASE_KEYSTORE_PASSWD
+        export P4A_RELEASE_KEYALIAS
+        export P4A_RELEASE_KEYALIAS_PASSWD
+        yes | buildozer -v android debug 2>&1 | tail -200
 
     - name: Téléverser un APK
       uses: actions/upload-artifact@v4
