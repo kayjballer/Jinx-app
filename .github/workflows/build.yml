@@ -62,9 +62,16 @@ jobs:
 
     - name: Construire avec Buildozer
       env:
+        P4A_RELEASE_KEYSTORE: ${{ github.workspace }}/jinx.keystore
         P4A_RELEASE_KEYSTORE_PASSWD: ${{ secrets.KEYSTORE_PASSWORD }}
-        P4A_RELEASE_KEYSTORE_ALIAS_PASSWD: ${{ secrets.KEY_PASSWORD }}
-      run: buildozer -v android debug
+        P4A_RELEASE_KEYALIAS: ${{ secrets.KEY_ALIAS }}
+        P4A_RELEASE_KEYALIAS_PASSWD: ${{ secrets.KEY_PASSWORD }}
+      run: |
+        chmod 600 jinx.keystore
+        echo "Keystore: $P4A_RELEASE_KEYSTORE"
+        echo "Alias: $P4A_RELEASE_KEYALIAS"
+        ls -la jinx.keystore
+        buildozer -v android release
 
     - name: Téléverser un APK
       uses: actions/upload-artifact@v4

@@ -11,6 +11,7 @@ android.add_libs_arm64_v8a = libs/arm64-v8a/*.so
 orientation = portrait
 fullscreen = 0
 android.permissions = RECORD_AUDIO,INTERNET,ACCESS_NETWORK_STATE,POST_NOTIFICATIONS,VIBRATE,SET_ALARM,MODIFY_AUDIO_SETTINGS,BLUETOOTH,BLUETOOTH_ADMIN,WRITE_SETTINGS,READ_CALENDAR,WRITE_CALENDAR
+android.release_artifact = jinx-release.apk
 android.keystore = jinx.keystore
 android.keyalias = jinx
 android.api = 33
