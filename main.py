@@ -1775,7 +1775,7 @@ class JinxApp(App):
                 self.lbl.text = "Modeles pas encore prets."
 
         section("Agent Directeur")
-        note("Le directeur orchestre les 6 agents de Jinx.")
+        note("Le directeur orchestre les 10 agents de Jinx.")
         pleine("Voir les agents", _ouvrir_agents_v4)
         pleine("Telecharger les modeles", self._telecharger_manuel)
         pleine("Historique des conversations", self._ouvrir_historique)
@@ -1832,7 +1832,7 @@ class JinxApp(App):
         ligne("Comment t'appeler", ti)
         choix("Modèle IA (puis redémarrer le cerveau)", "modele",
               ["1.5B", "3B"],
-              {"1.5B": "1,5B rapide", "3B": "3B plus fin"})
+              {"1.5B": "0.5B rapide", "3B": "3B intelligent"})
 
         section("Mémoire")
         interrupteur("Utiliser la mémoire", "memoire")

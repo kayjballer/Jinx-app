@@ -166,7 +166,7 @@ class Director:
             try:
                 memoire = context.get("memoire", "")
                 exemples = context.get("exemples", [])
-                rep = llm_fn(query, (memoire, exemples))
+                rep = llm_fn(query, {"memoire": memoire, "exemples": exemples})
                 self._log_conversation(query, rep, ["llm"])
                 return rep
             except Exception as e:
