@@ -32,3 +32,6 @@ nohup.out
 # Signature (fourni par GitHub Secrets)
 *.keystore
 *.keystore.base64
+
+# Backups locaux
+.backup_*/
