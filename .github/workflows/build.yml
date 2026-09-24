@@ -32,13 +32,13 @@ jobs:
 
     - name: Installer Buildozer
       run: |
-        pip install --upgrade pip setuptools wheel
-        pip install buildozer "cython<3.0" "setuptools<70"
+        pip install --upgrade pip
+        pip install buildozer "cython<3.0"
 
     - name: Construire l'APK
       run: |
         set -o pipefail
-        buildozer android debug 2>&1 | tee /tmp/build.log | tail -150
+        buildozer android debug 2>&1 | tee /tmp/build.log | tail -200
         exit ${PIPESTATUS[0]}
 
     - name: Upload APK
