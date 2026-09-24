@@ -62,38 +62,43 @@ class ModelManager:
             time.sleep(0.8)
         return False
 
-    def _cmd_optimisee(self, nom: str, chemin: str, port: int) -> list:
+    def _cmd_optimisee(self, nom: str, chemin: str, port: int,
+                       safe_mode: bool = False) -> list:
         """
-        Construit la commande llama-server optimisée.
-        Chaque flag = un gain de vitesse.
+        Construit la commande llama-server.
+        Mode normal = optimisé. Mode safe = uniquement les flags basiques.
         """
-        # Threads : tous les cœurs pour le 3B, moitié pour le 0.5B
         threads = self.nb_threads if nom == "intelligent" else max(2, self.nb_threads // 2)
-        # Contexte : réduit pour la vitesse
         ctx = 1024 if nom == "rapide" else 2048
 
-        cmd = [
+        if safe_mode:
+            # Mode SAFE : uniquement les flags universels
+            return [
+                self.binaire,
+                "-m", chemin,
+                "--port", str(port),
+                "-c", str(ctx),
+                "-t", str(threads),
+                "--log-disable",
+            ]
+
+        # Mode normal : flags optimisés mais risqués
+        return [
             self.binaire,
             "-m", chemin,
             "--port", str(port),
-            "-c", str(ctx),           # Contexte
-            "-t", str(threads),        # Threads CPU
-            "-b", "512",               # Batch size (prompt processing)
-            "-ub", "512",              # Micro-batch
-            "-fa",                     # Flash attention (rapide sur ARM)
-            "--no-warmup",             # Pas de préchauffage
-            "--no-mmap",               # Charge tout en RAM (plus rapide)
-            "--log-disable",           # Pas de logs (gain CPU)
-            # KV cache quantifié (économise ~30% de RAM)
-            "--cache-type-k", "q8_0",
-            "--cache-type-v", "q8_0",
-            # Sampling par défaut (bon compromis qualité/vitesse)
+            "-c", str(ctx),
+            "-t", str(threads),
+            "-b", "512",
+            "-ub", "512",
+            "-fa",
+            "--no-warmup",
+            "--log-disable",
             "--temp", "0.7",
             "--top-k", "40",
             "--top-p", "0.9",
             "--repeat-penalty", "1.1",
         ]
-        return cmd
 
     def _demarrer(self, nom: str) -> bool:
         if nom in self.procs and self.procs[nom].poll() is None:
@@ -104,8 +109,21 @@ class ModelManager:
             return False
 
         port = CATALOG[nom]["port"]
-        cmd = self._cmd_optimisee(nom, chemin, port)
-        log.info("Démarrage %s : %s", nom, " ".join(cmd))
+
+        # Tentative 1 : mode optimisé
+        if self._essayer_mode(nom, chemin, port, safe=False):
+            return True
+
+        # Tentative 2 : mode SAFE (si optimisé plante)
+        log.warning("Mode optimisé échoué, on retente en SAFE")
+        self._arreter(nom)
+        return self._essayer_mode(nom, chemin, port, safe=True)
+
+    def _essayer_mode(self, nom: str, chemin: str, port: int,
+                       safe: bool) -> bool:
+        cmd = self._cmd_optimisee(nom, chemin, port, safe_mode=safe)
+        mode = "SAFE" if safe else "OPTIM"
+        log.info("Démarrage %s [%s] : %s", nom, mode, " ".join(cmd))
 
         try:
             proc = subprocess.Popen(
@@ -121,9 +139,7 @@ class ModelManager:
 
         ok = self._attendre_pret(port, timeout=90 if nom == "intelligent" else 45)
         if ok:
-            log.info("Modèle %s prêt sur port %d", nom, port)
-        else:
-            log.error("Modèle %s timeout", nom)
+            log.info("Modèle %s prêt [%s] sur port %d", nom, mode, port)
         return ok
 
     def _arreter(self, nom: str) -> None:
