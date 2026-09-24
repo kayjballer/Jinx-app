@@ -45,6 +45,34 @@ from agents import build_default_director, ModelManager, ModelDownloader
 from agents.splash import afficher_splash_dl
 from agents.bulle2d import Bulle2D
 
+# --- LOGGING JINX (avant tout le reste) ---
+import os as _os
+import sys as _sys
+import traceback as _tb
+import datetime as _dt
+
+_LOG_PATH = "/sdcard/jinx_crash.log"
+if not _os.path.exists("/sdcard"):
+    _LOG_PATH = _os.path.join(_os.path.expanduser("~"), "jinx_crash.log")
+
+def _log(msg):
+    try:
+        with open(_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"[{_dt.datetime.now().isoformat()}] {msg}\n")
+    except Exception:
+        pass
+
+_log("=== JINX STARTUP ===")
+
+# Capture globale des exceptions
+def _excepthook(t, v, tb):
+    _log("=== CRASH ===")
+    _log("".join(_tb.format_exception(t, v, tb)))
+    _sys.__excepthook__(t, v, tb)
+
+_sys.excepthook = _excepthook
+# --- FIN LOGGING ---
+
 VERSION = "0.31"
 STOP_TTS = False
 _TTS_SINGLETON = {"instance": None}
@@ -1083,6 +1111,15 @@ class JinxApp(App):
 
     # --------------------------------------------------------- modeles IA
     def _init_modeles(self, *a):
+        try:
+            self._init_modeles_impl(*a)
+        except Exception as e:
+            import traceback
+            _log("=== CRASH _init_modeles ===")
+            _log(traceback.format_exc())
+            self.lbl.text = "Erreur init : " + str(e)[:80]
+
+    def _init_modeles_impl(self, *a):
         dossier = self.user_data_dir
         dossier_models = os.path.join(dossier, "models")
         self.downloader = ModelDownloader(dossier_models)
@@ -1102,6 +1139,15 @@ class JinxApp(App):
             self._modeles_prets()
 
     def _modeles_prets(self, *a):
+        try:
+            self._modeles_prets_impl(*a)
+        except Exception as e:
+            import traceback
+            _log("=== CRASH _modeles_prets ===")
+            _log(traceback.format_exc())
+            self.lbl.text = "Erreur : " + str(e)[:80]
+
+    def _modeles_prets_impl(self, *a):
         dossier = self.user_data_dir
         dossier_models = os.path.join(dossier, "models")
         llama_binaire = trouver_llama_server(dossier)
