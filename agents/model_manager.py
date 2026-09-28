@@ -1,4 +1,4 @@
-"""agents/model_manager.py — llama-server optimisé pour mobile ARM."""
+"""agents/model_manager.py — llama-server simplifié (1 modèle)."""
 from __future__ import annotations
 
 import logging
@@ -16,20 +16,13 @@ log = logging.getLogger("jinx.models")
 
 
 def _nb_threads() -> int:
-    """Nombre de cœurs disponibles (max 8 pour éviter la surchauffe)."""
     try:
-        n = multiprocessing.cpu_count()
-        return min(max(n, 2), 8)
+        return min(max(multiprocessing.cpu_count(), 2), 8)
     except Exception:
         return 4
 
 
 class ModelManager:
-    """
-    Gère 2 modèles (rapide 0.5B + intelligent 3B).
-    Optimisé mobile : threads max, flash attention, KV cache quantifié.
-    """
-
     def __init__(self, dossier_models: str, llama_binaire: str):
         self.dossier = dossier_models
         self.binaire = llama_binaire
@@ -37,7 +30,7 @@ class ModelManager:
         self._lock = threading.Lock()
         self._preloaded = False
         self.nb_threads = _nb_threads()
-        log.info("ModelManager : %d threads disponibles", self.nb_threads)
+        log.info("ModelManager : %d threads", self.nb_threads)
 
     def chemin(self, nom: str) -> str:
         return os.path.join(self.dossier, f"{nom}.gguf")
@@ -62,43 +55,25 @@ class ModelManager:
             time.sleep(0.8)
         return False
 
-    def _cmd_optimisee(self, nom: str, chemin: str, port: int,
-                       safe_mode: bool = False) -> list:
-        """
-        Construit la commande llama-server.
-        Mode normal = optimisé. Mode safe = uniquement les flags basiques.
-        """
-        threads = self.nb_threads if nom == "intelligent" else max(2, self.nb_threads // 2)
-        ctx = 1024 if nom == "rapide" else 2048
+    def _cmd(self, nom: str, chemin: str, port: int, safe: bool = False) -> list:
+        base = [self.binaire, "-m", chemin, "--port", str(port),
+                "-c", "2048", "-t", str(self.nb_threads), "--log-disable"]
+        if safe:
+            return base
+        return base + ["-b", "512", "-fa", "--no-warmup"]
 
-        if safe_mode:
-            # Mode SAFE : uniquement les flags universels
-            return [
-                self.binaire,
-                "-m", chemin,
-                "--port", str(port),
-                "-c", str(ctx),
-                "-t", str(threads),
-                "--log-disable",
-            ]
-
-        # Mode normal : flags optimisés mais risqués
-        return [
-            self.binaire,
-            "-m", chemin,
-            "--port", str(port),
-            "-c", str(ctx),
-            "-t", str(threads),
-            "-b", "512",
-            "-ub", "512",
-            "-fa",
-            "--no-warmup",
-            "--log-disable",
-            "--temp", "0.7",
-            "--top-k", "40",
-            "--top-p", "0.9",
-            "--repeat-penalty", "1.1",
-        ]
+    def _essayer(self, nom: str, chemin: str, port: int, safe: bool) -> bool:
+        cmd = self._cmd(nom, chemin, port, safe=safe)
+        mode = "SAFE" if safe else "OPTIM"
+        log.info("Démarrage %s [%s]", nom, mode)
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, cwd=self.dossier)
+            self.procs[nom] = proc
+        except Exception as e:
+            log.error("Lancement %s : %s", nom, e)
+            return False
+        return self._attendre_pret(port, timeout=90)
 
     def _demarrer(self, nom: str) -> bool:
         if nom in self.procs and self.procs[nom].poll() is None:
@@ -107,76 +82,30 @@ class ModelManager:
         if not os.path.exists(chemin):
             log.error("Modèle %s absent : %s", nom, chemin)
             return False
-
         port = CATALOG[nom]["port"]
-
-        # Tentative 1 : mode optimisé
-        if self._essayer_mode(nom, chemin, port, safe=False):
+        if self._essayer(nom, chemin, port, safe=False):
             return True
+        log.warning("Fallback SAFE")
+        return self._essayer(nom, chemin, port, safe=True)
 
-        # Tentative 2 : mode SAFE (si optimisé plante)
-        log.warning("Mode optimisé échoué, on retente en SAFE")
-        self._arreter(nom)
-        return self._essayer_mode(nom, chemin, port, safe=True)
-
-    def _essayer_mode(self, nom: str, chemin: str, port: int,
-                       safe: bool) -> bool:
-        cmd = self._cmd_optimisee(nom, chemin, port, safe_mode=safe)
-        mode = "SAFE" if safe else "OPTIM"
-        log.info("Démarrage %s [%s] : %s", nom, mode, " ".join(cmd))
-
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                cwd=self.dossier,
-            )
-            self.procs[nom] = proc
-        except Exception as e:
-            log.error("Lancement %s échoué : %s", nom, e)
-            return False
-
-        ok = self._attendre_pret(port, timeout=90 if nom == "intelligent" else 45)
-        if ok:
-            log.info("Modèle %s prêt [%s] sur port %d", nom, mode, port)
-        return ok
-
-    def _arreter(self, nom: str) -> None:
-        proc = self.procs.get(nom)
-        if proc:
-            try:
-                proc.terminate()
-                proc.wait(timeout=8)
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-            self.procs.pop(nom, None)
-
-    def precharger_rapide(self) -> bool:
-        """Pré-charge le 0.5B en arrière-plan."""
-        if self._preloaded:
-            return True
-        with self._lock:
-            ok = self._demarrer("rapide")
-            if ok:
-                self._preloaded = True
-                log.info("Modèle rapide pré-chargé")
-            return ok
-
-    def ensure(self, nom: str) -> Optional[str]:
-        """S'assure que le modèle est chargé. Retourne l'URL."""
+    def ensure(self, nom: str = "default") -> Optional[str]:
         with self._lock:
             if self._demarrer(nom):
-                if nom == "rapide":
-                    self._preloaded = True
+                self._preloaded = True
                 return self.url_pour(nom)
             return None
 
+    def precharger(self) -> bool:
+        return self.ensure("default") is not None
+
     def stop_all(self) -> None:
         with self._lock:
-            for nom in list(self.procs.keys()):
-                self._arreter(nom)
+            for nom, proc in list(self.procs.items()):
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=8)
+                except Exception:
+                    try: proc.kill()
+                    except Exception: pass
+                self.procs.pop(nom, None)
             self._preloaded = False

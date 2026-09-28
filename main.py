@@ -45,34 +45,6 @@ from agents import build_default_director, ModelManager, ModelDownloader
 from agents.splash import afficher_splash_dl
 from agents.bulle2d import Bulle2D
 
-# --- LOGGING JINX (avant tout le reste) ---
-import os as _os
-import sys as _sys
-import traceback as _tb
-import datetime as _dt
-
-_LOG_PATH = "/sdcard/jinx_crash.log"
-if not _os.path.exists("/sdcard"):
-    _LOG_PATH = _os.path.join(_os.path.expanduser("~"), "jinx_crash.log")
-
-def _log(msg):
-    try:
-        with open(_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(f"[{_dt.datetime.now().isoformat()}] {msg}\n")
-    except Exception:
-        pass
-
-_log("=== JINX STARTUP ===")
-
-# Capture globale des exceptions
-def _excepthook(t, v, tb):
-    _log("=== CRASH ===")
-    _log("".join(_tb.format_exception(t, v, tb)))
-    _sys.__excepthook__(t, v, tb)
-
-_sys.excepthook = _excepthook
-# --- FIN LOGGING ---
-
 VERSION = "0.31"
 STOP_TTS = False
 _TTS_SINGLETON = {"instance": None}
@@ -448,16 +420,16 @@ def parler_texte(texte, force=False):
 
 MODELES = {
     "1.5B": {
-        "fichier": "rapide.gguf",
-        "url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
-        "mini": 100000000,
-        "total": 500000000,
+        "fichier": "default.gguf",
+        "url": "https://huggingface.co/Qwen/Qwen3.5-2B-Instruct-GGUF/resolve/main/qwen3.5-2b-instruct-q4_k_m.gguf",
+        "mini": 800000000,
+        "total": 1300000000,
     },
     "3B": {
-        "fichier": "intelligent.gguf",
-        "url": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
-        "mini": 1800000000,
-        "total": 2200000000,
+        "fichier": "default.gguf",
+        "url": "https://huggingface.co/Qwen/Qwen3.5-2B-Instruct-GGUF/resolve/main/qwen3.5-2b-instruct-q4_k_m.gguf",
+        "mini": 800000000,
+        "total": 1300000000,
     },
 }
 
@@ -537,7 +509,7 @@ def lancer_cerveau(dossier, statut):
     if not os.path.exists(binaire):
         statut("Serveur IA absent de l APK")
         return False
-    mod = MODELES.get(SET["modele"], MODELES["3B"])
+    mod = MODELES.get(SET["modele"], MODELES["1.5B"])
     modele = os.path.join(dossier, mod["fichier"])
     if not os.path.exists(modele) or os.path.getsize(modele) < mod["mini"]:
         tmp = modele + ".part"
@@ -1111,15 +1083,6 @@ class JinxApp(App):
 
     # --------------------------------------------------------- modeles IA
     def _init_modeles(self, *a):
-        try:
-            self._init_modeles_impl(*a)
-        except Exception as e:
-            import traceback
-            _log("=== CRASH _init_modeles ===")
-            _log(traceback.format_exc())
-            self.lbl.text = "Erreur init : " + str(e)[:80]
-
-    def _init_modeles_impl(self, *a):
         dossier = self.user_data_dir
         dossier_models = os.path.join(dossier, "models")
         self.downloader = ModelDownloader(dossier_models)
@@ -1139,15 +1102,6 @@ class JinxApp(App):
             self._modeles_prets()
 
     def _modeles_prets(self, *a):
-        try:
-            self._modeles_prets_impl(*a)
-        except Exception as e:
-            import traceback
-            _log("=== CRASH _modeles_prets ===")
-            _log(traceback.format_exc())
-            self.lbl.text = "Erreur : " + str(e)[:80]
-
-    def _modeles_prets_impl(self, *a):
         dossier = self.user_data_dir
         dossier_models = os.path.join(dossier, "models")
         llama_binaire = trouver_llama_server(dossier)
@@ -1165,30 +1119,10 @@ class JinxApp(App):
             dossier=dossier,
             model_manager=self.model_manager,
         )
-        self.director.set_core(get_core())
         self.lbl.text = "Pret ! Touche la bulle pour parler."
 
 
-    def _telecharger_manuel(self, *a):
-        dossier = self.user_data_dir
-        dossier_models = os.path.join(dossier, "models")
-        if not hasattr(self, "downloader"):
-            self.downloader = ModelDownloader(dossier_models)
-        manquants = self.downloader.manquants()
-        if not manquants:
-            self.lbl.text = "Tous les modeles sont deja installes."
-            self._modeles_prets()
-            return
-        self.lbl.text = "Telechargement de %d modele(s)..." % len(manquants)
-        afficher_splash_dl(
-            self.downloader,
-            on_done=self._modeles_prets,
-            on_error=lambda: setattr(
-                self.lbl, "text",
-                "Erreur pendant le telechargement. Relance Jinx."),
-        )
-
-
+    # ---------------------------------------------------------- STOP
     def _stopper_reflexion(self, *a):
         """Annule la requête ET arrête la lecture vocale."""
         global STOP_TTS
@@ -1302,59 +1236,6 @@ class JinxApp(App):
         except Exception as e:
             print(f"Fallback notif échoué : {e}")
         return False
-
-
-    def _demander_confirmation(self, agent, query, message):
-        """Affiche une modale pour confirmer une action critique."""
-        from kivy.uix.modalview import ModalView
-        from kivy.uix.boxlayout import BoxLayout
-        from kivy.uix.label import Label
-        from kivy.uix.button import Button
-
-        mv = ModalView(size_hint=(0.9, 0.4),
-                       background_color=(0.05, 0.04, 0.02, 0.98),
-                       auto_dismiss=False)
-        root = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(10))
-
-        root.add_widget(Label(
-            text="[b]Confirmation requise[/b]\n\n" + message,
-            markup=True, font_size="14sp",
-            halign="center", valign="middle"))
-        root.add_widget(Label(
-            text="« %s »" % query[:80],
-            font_size="12sp", color=(0.9, 0.75, 0.3, 1),
-            halign="center"))
-
-        btns = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(8))
-
-        def autoriser(*a):
-            mv.dismiss()
-            self.bulle.set_etat("reflexion")
-            self.etat_lbl.text = "Julie réfléchit..."
-            def _run():
-                rep = self.director.confirmer_action(agent, query)
-                def _aff(d):
-                    self.repondre(query, rep)
-                Clock.schedule_once(_aff, 0)
-            import threading
-            threading.Thread(target=_run, daemon=True).start()
-
-        def refuser(*a):
-            mv.dismiss()
-            self.repondre(query, "Action annulée.")
-
-        bt_oui = Button(text="Autoriser",
-                        background_color=(0.2, 0.55, 0.25, 1))
-        bt_non = Button(text="Refuser",
-                        background_color=(0.6, 0.2, 0.15, 1))
-        bt_oui.bind(on_release=autoriser)
-        bt_non.bind(on_release=refuser)
-        btns.add_widget(bt_oui)
-        btns.add_widget(bt_non)
-        root.add_widget(btns)
-
-        mv.add_widget(root)
-        mv.open()
 
 
     def touche_titre(self, w, touch):
@@ -1503,17 +1384,6 @@ class JinxApp(App):
         def _reponse(rep):
             if self.stop_requested:
                 self.stop_requested = False
-                return
-            # Confirmation requise ?
-            if isinstance(rep, str) and rep.startswith("[JINX_CONFIRM]"):
-                try:
-                    contenu = rep.replace("[JINX_CONFIRM]", "", 1)
-                    agent, query, msg = contenu.split("|||", 2)
-                    Clock.schedule_once(
-                        lambda d: self._demander_confirmation(agent, query, msg),
-                        0)
-                except Exception as e:
-                    print("Erreur parsing CONFIRM:", e)
                 return
             if SET.get("historique"):
                 try:
@@ -1680,16 +1550,57 @@ class JinxApp(App):
             box.add_widget(sl)
             ligne(texte, box, 62)
 
+        note("Le directeur orchestre les 6 agents de Jinx.")
+
+        haut = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        haut.add_widget(Label(text="Paramètres", bold=True, font_size="20sp",
+                              color=OR))
+        haut.add_widget(mk("Fermer", mv.dismiss, largeur=dp(90)))
+        col.add_widget(haut)
+        sv = ScrollView(do_scroll_x=False)
+        sv.add_widget(liste)
+        col.add_widget(sv)
+        mv.add_widget(col)
+
+        section("Voix et écoute")
+        curseur("Délai de silence", "silence", 0.8, 3.0, 0.1,
+                lambda v: "%.1f s" % v)
+        choix("Langue d'écoute", "langue", ["fr-FR", "en-US"],
+              {"fr-FR": "Français", "en-US": "English"})
+        interrupteur("Réponses à voix haute", "voix_active")
+        curseur("Vitesse de la voix", "vitesse", 0.6, 1.6, 0.1,
+                lambda v: "%.1fx" % v)
+        curseur("Hauteur de la voix", "hauteur", 0.6, 1.5, 0.1,
+                lambda v: "%.1fx" % v)
+        voix = [""] + voix_disponibles()
+        if SET["voix_nom"] not in voix:
+            voix.append(SET["voix_nom"])
+        choix("Voix Android", "voix_nom", voix, {"": "Par défaut"})
+        pleine("Tester la voix",
+               lambda: parler_texte("Salut, c'est Jinx. Comment ça va ?", True))
+
+        choix("Personnalité", "perso", ["taquine", "serieuse", "pro", "coach"],
+              {"taquine": "Taquine", "serieuse": "Sérieuse",
+               "pro": "Professionnelle", "coach": "Coach"})
+        choix("Longueur des réponses", "longueur",
+              ["courtes", "moyennes", "longues"],
+              {"courtes": "Courtes", "moyennes": "Moyennes",
+               "longues": "Longues"})
+        curseur("Créativité", "creativite", 0.0, 1.0, 0.05,
+                lambda v: "%d %%" % round(v * 100))
+        ti = TextInput(text=SET["surnom"], multiline=False,
+                       hint_text="ex : Jacques",
+                       background_color=(0.12, 0.10, 0.05, 1),
+                       foreground_color=BL, cursor_color=OR,
+                       hint_text_color=(0.5, 0.45, 0.35, 1),
+                       padding=(dp(8), dp(12)))
+
         def nom_change(inst, v):
             SET["surnom"] = v.strip()[:30]
             sauver()
         ti.bind(text=nom_change)
         ligne("Comment t'appeler", ti)
-        choix("Modèle IA (puis redémarrer le cerveau)", "modele",
-              ["1.5B", "3B"],
-              {"1.5B": "0.5B rapide", "3B": "3B intelligent"})
 
-        section("Mémoire")
         interrupteur("Utiliser la mémoire", "memoire")
         interrupteur("Enregistrer l'historique", "historique")
         pleine("Voir mes souvenirs", self.voir_souvenirs)
@@ -1705,12 +1616,13 @@ class JinxApp(App):
         curseur("Intensité du halo", "halo", 0.3, 1.5, 0.1,
                 lambda v: "%d %%" % round(v * 100),
                 apres=self.appliquer_reglages)
+        interrupteur("Économie d'énergie", "eco", self.appliquer_reglages)
         curseur("Taille du texte", "texte", 14, 26, 1, lambda v: "%d" % v,
                 apres=self.appliquer_reglages, entier=True)
 
         section("Système")
         etat = "prêt" if serveur_pret() else "arrêté"
-        note("Cerveau : Qwen 3B")
+        note("Cerveau : Qwen 3.5 2B")
         pleine("Redémarrer le cerveau",
                lambda: (mv.dismiss(),
                         self.demarrer_cerveau(avant=arreter_cerveau)))
@@ -1719,7 +1631,7 @@ class JinxApp(App):
         pleine("Supprimer le modèle inutilisé",
                lambda: self.confirmer("Supprimer le modèle que tu n'utilises pas ?",
                                       self.supprimer_inutilises))
-        pleine("Retélécharger le modèle",
+        pleine("Retélécharger le modèle actuel",
                lambda: self.confirmer("Supprimer puis retélécharger le modèle actuel ?",
                                       lambda: (mv.dismiss(), self.retelecharger())))
         note("Jinx version %s · marges %s" % (VERSION, marges_systeme()))

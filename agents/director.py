@@ -1,4 +1,4 @@
-"""agents/director.py — Un seul cerveau : Qwen 3B + contexte système."""
+"""agents/director.py — Un seul cerveau : Qwen 3.5 2B + contexte système."""
 from __future__ import annotations
 
 import datetime
@@ -15,7 +15,6 @@ class Director:
     def __init__(self, model_manager=None):
         self.model_manager = model_manager
         self.core = None
-        self.conv_store = None
         self._lock = threading.Lock()
 
     def set_core(self, core):
@@ -65,33 +64,24 @@ class Director:
             log.warning("contexte_systeme: %s", e)
             return ""
 
-    def _prompt_complet(self, query: str, contexte: str,
-                        memoire: str = "") -> str:
-        parties = [
+    def _prompt_complet(self, query: str, contexte: str) -> str:
+        return (
             "Tu es Jinx, un assistant vocal personnel. "
             "Tu réponds en français, de manière naturelle, chaleureuse et concise. "
             "Si on te demande l'heure, la date, la batterie ou le réseau, "
-            "utilise le contexte système fourni ci-dessous."
-        ]
-        if contexte:
-            parties.append(f"\nContexte système :\n{contexte}")
-        if memoire:
-            parties.append(f"\nCe que tu sais de l'utilisateur :\n{memoire}")
-        parties.append(f"\nUtilisateur : {query}")
-        parties.append("\nJinx :")
-        return "\n".join(parties)
+            "utilise le contexte système fourni.\n\n"
+            f"Contexte système :\n{contexte}\n\n"
+            f"Utilisateur : {query}\nJinx :"
+        )
 
     def _appeler_llm(self, prompt: str, url: str, timeout: int = 120) -> str:
         payload = {
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.6,
             "top_p": 0.9,
-            "top_k": 40,
-            "repeat_penalty": 1.1,
-            "max_tokens": 256,       # Réponses courtes = plus rapide
+            "max_tokens": 256,
             "stream": False,
-            # Stop tokens pour éviter les répétitions
-            "stop": ["\nUtilisateur :", "\nUser :", "\n\nJinx"],
+            "stop": ["\nUtilisateur :", "\nUser :"],
         }
         data = json.dumps(payload).encode("utf-8")
         req = request.Request(url, data=data,
@@ -106,29 +96,17 @@ class Director:
 
     def handle(self, query: str,
                context: Optional[Dict[str, Any]] = None) -> str:
-        context = context or {}
         contexte = self._contexte_systeme()
-        memoire = context.get("memoire", "")
-        prompt = self._prompt_complet(query, contexte, memoire)
+        prompt = self._prompt_complet(query, contexte)
 
         if not self.model_manager:
             return "Aucun modèle disponible."
 
-        url = self.model_manager.ensure("intelligent")
+        url = self.model_manager.ensure("default")
         if not url:
-            url = self.model_manager.ensure("rapide")
-            if not url:
-                return "Impossible de charger le modèle."
+            return "Impossible de charger le modèle."
 
-        rep = self._appeler_llm(prompt, url)
-
-        if self.conv_store:
-            try:
-                self.conv_store.enregistrer(query, rep, "jinx")
-            except Exception:
-                pass
-
-        return rep
+        return self._appeler_llm(prompt, url)
 
     def handle_async(self, query: str, callback: Callable[[str], None],
                      context: Optional[Dict[str, Any]] = None) -> None:
@@ -146,5 +124,4 @@ class Director:
 
 
 def build_default_director(dossier: str, model_manager=None) -> Director:
-    d = Director(model_manager=model_manager)
-    return d
+    return Director(model_manager=model_manager)
