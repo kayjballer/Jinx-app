@@ -1,34 +1,36 @@
-"""agents/model_manager.py — Charge/décharge les modèles GGUF à la demande."""
+"""agents/model_manager.py — llama-server simplifié (1 modèle)."""
 from __future__ import annotations
 
 import logging
+import multiprocessing
 import os
-import ssl
 import subprocess
 import threading
 import time
 from typing import Dict, Optional
 from urllib import request
 
-try:
-    import certifi
-    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
-except Exception:
-    _SSL_CTX = ssl.create_default_context()
-
 from .models_catalog import CATALOG
 
 log = logging.getLogger("jinx.models")
 
 
+def _nb_threads() -> int:
+    try:
+        return min(max(multiprocessing.cpu_count(), 2), 8)
+    except Exception:
+        return 4
+
+
 class ModelManager:
-    def __init__(self, dossier_models: str, llama_binaire: str, mode: str = "swap"):
+    def __init__(self, dossier_models: str, llama_binaire: str):
         self.dossier = dossier_models
         self.binaire = llama_binaire
-        self.mode = mode
         self.procs: Dict[str, subprocess.Popen] = {}
-        self.actif: Optional[str] = None
         self._lock = threading.Lock()
+        self._preloaded = False
+        self.nb_threads = _nb_threads()
+        log.info("ModelManager : %d threads", self.nb_threads)
 
     def chemin(self, nom: str) -> str:
         return os.path.join(self.dossier, f"{nom}.gguf")
@@ -40,74 +42,70 @@ class ModelManager:
         port = CATALOG[nom]["port"]
         return f"http://127.0.0.1:{port}/v1/chat/completions"
 
-    def _attendre_pret(self, port: int, timeout: int = 120) -> bool:
+    def _attendre_pret(self, port: int, timeout: int = 60) -> bool:
         url = f"http://127.0.0.1:{port}/health"
         t0 = time.time()
         while time.time() - t0 < timeout:
             try:
-                with request.urlopen(url, timeout=2, context=_SSL_CTX) as r:
+                with request.urlopen(url, timeout=2) as r:
                     if r.status == 200:
                         return True
             except Exception:
                 pass
-            time.sleep(1.5)
+            time.sleep(0.8)
         return False
+
+    def _cmd(self, nom: str, chemin: str, port: int, safe: bool = False) -> list:
+        base = [self.binaire, "-m", chemin, "--port", str(port),
+                "-c", "2048", "-t", str(self.nb_threads), "--log-disable"]
+        if safe:
+            return base
+        return base + ["-b", "512", "-fa", "--no-warmup"]
+
+    def _essayer(self, nom: str, chemin: str, port: int, safe: bool) -> bool:
+        cmd = self._cmd(nom, chemin, port, safe=safe)
+        mode = "SAFE" if safe else "OPTIM"
+        log.info("Démarrage %s [%s]", nom, mode)
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, cwd=self.dossier)
+            self.procs[nom] = proc
+        except Exception as e:
+            log.error("Lancement %s : %s", nom, e)
+            return False
+        return self._attendre_pret(port, timeout=90)
 
     def _demarrer(self, nom: str) -> bool:
         if nom in self.procs and self.procs[nom].poll() is None:
             return True
         chemin = self.chemin(nom)
         if not os.path.exists(chemin):
-            log.error("Modèle %s absent", nom)
+            log.error("Modèle %s absent : %s", nom, chemin)
             return False
         port = CATALOG[nom]["port"]
-        cmd = [self.binaire, "-m", chemin,
-               "--port", str(port), "-c", "4096", "-t", "4"]
-        log.info("Démarrage %s sur port %d", nom, port)
-        try:
-            proc = subprocess.Popen(cmd,
-                                    stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL,
-                                    cwd=self.dossier)
-            self.procs[nom] = proc
-        except Exception as e:
-            log.error("Lancement %s échoué : %s", nom, e)
-            return False
-        return self._attendre_pret(port)
+        if self._essayer(nom, chemin, port, safe=False):
+            return True
+        log.warning("Fallback SAFE")
+        return self._essayer(nom, chemin, port, safe=True)
 
-    def _arreter(self, nom: str) -> None:
-        proc = self.procs.get(nom)
-        if proc:
-            try:
-                proc.terminate()
-                proc.wait(timeout=10)
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-            self.procs.pop(nom, None)
-
-    def ensure(self, nom: str) -> Optional[str]:
+    def ensure(self, nom: str = "default") -> Optional[str]:
         with self._lock:
-            if self.mode == "multi":
-                if self._demarrer(nom):
-                    return self.url_pour(nom)
-                return None
-            if self.actif == nom and nom in self.procs \
-                    and self.procs[nom].poll() is None:
-                return self.url_pour(nom)
-            if self.actif and self.actif != nom:
-                log.info("Swap %s -> %s", self.actif, nom)
-                self._arreter(self.actif)
-                time.sleep(1.5)
             if self._demarrer(nom):
-                self.actif = nom
+                self._preloaded = True
                 return self.url_pour(nom)
             return None
 
+    def precharger(self) -> bool:
+        return self.ensure("default") is not None
+
     def stop_all(self) -> None:
         with self._lock:
-            for nom in list(self.procs.keys()):
-                self._arreter(nom)
-            self.actif = None
+            for nom, proc in list(self.procs.items()):
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=8)
+                except Exception:
+                    try: proc.kill()
+                    except Exception: pass
+                self.procs.pop(nom, None)
+            self._preloaded = False

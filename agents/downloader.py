@@ -1,8 +1,7 @@
-"""agents/downloader.py — Téléchargement des modèles (reprise + progression)."""
+"""agents/downloader.py — Téléchargement du modèle (Qwen 3.5 2B)."""
 from __future__ import annotations
 
 import hashlib
-import ssl
 import logging
 import os
 import threading
@@ -10,13 +9,7 @@ import time
 from typing import Callable, Optional
 from urllib import request
 
-try:
-    import certifi
-    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
-except Exception:
-    _SSL_CTX = ssl.create_default_context()
-
-from .models_catalog import CATALOG, total_mo
+from .models_catalog import CATALOG
 
 log = logging.getLogger("jinx.dl")
 
@@ -29,27 +22,17 @@ class ModelDownloader:
     def chemin(self, nom: str) -> str:
         return os.path.join(self.dossier, f"{nom}.gguf")
 
-    def _marqueur(self, nom: str) -> str:
-        return self.chemin(nom) + ".done"
-
     def est_present(self, nom: str) -> bool:
-        """Vrai si le modèle a été téléchargé ET marqué .done."""
-        # 1) Marqueur .done (source de vérité)
-        if os.path.exists(self._marqueur(nom)):
-            return True
-        # 2) Compat : fichier .gguf > 100 Mo et pas de .part en cours
         p = self.chemin(nom)
         if not os.path.exists(p):
             return False
-        if os.path.exists(p + ".part"):
-            return False
-        # Si gros fichier, on considère OK et on marque
+        if os.path.exists(p + ".done"):
+            return True
+        attendu_mo = CATALOG[nom]["taille_mo"]
         taille_mo = os.path.getsize(p) / (1024 * 1024)
-        if taille_mo > 100:
-            try:
-                open(self._marqueur(nom), "w").close()
-            except Exception:
-                pass
+        if taille_mo > attendu_mo * 0.9:
+            try: open(p + ".done", "w").close()
+            except Exception: pass
             return True
         return False
 
@@ -74,7 +57,7 @@ class ModelDownloader:
             req.add_header("Range", f"bytes={deja}-")
 
         try:
-            with request.urlopen(req, timeout=30, context=_SSL_CTX) as r:
+            with request.urlopen(req, timeout=30) as r:
                 total = int(r.headers.get("Content-Length", 0)) + deja
                 mode = "ab" if deja > 0 else "wb"
                 with open(part, mode) as f:
@@ -101,22 +84,9 @@ class ModelDownloader:
                 on_progress(0.0, f"Erreur {nom} : {e}")
             return False
 
-        sha = info.get("sha256", "").strip()
-        if sha:
-            h = hashlib.sha256()
-            with open(part, "rb") as f:
-                for b in iter(lambda: f.read(1 << 20), b""):
-                    h.update(b)
-            if h.hexdigest().lower() != sha.lower():
-                os.remove(part)
-                return False
-
         os.rename(part, dest)
-        # Marqueur .done
-        try:
-            open(dest + ".done", "w").close()
-        except Exception:
-            pass
+        try: open(dest + ".done", "w").close()
+        except Exception: pass
         return True
 
     def telecharger_tout(self, on_progress=None, stop_flag=None) -> bool:
@@ -126,17 +96,12 @@ class ModelDownloader:
                 on_progress(1.0, "Tous les modèles sont prêts")
             return True
 
-        total = total_mo()
-        deja = total - sum(CATALOG[n]["taille_mo"] for n in manquants)
-
         for i, nom in enumerate(manquants):
             info = CATALOG[nom]
 
-            def cb(ratio, txt, i=i, nom=nom, info=info):
-                global_r = (deja + sum(CATALOG[n]["taille_mo"] for n in manquants[:i])
-                            + info["taille_mo"] * ratio) / total
+            def cb(ratio, txt, i=i, nom=nom):
                 if on_progress:
-                    on_progress(global_r, f"[{i+1}/{len(manquants)}] {txt}")
+                    on_progress(ratio, f"[{i+1}/{len(manquants)}] {txt}")
 
             if not self.telecharger(nom, on_progress=cb, stop_flag=stop_flag):
                 return False

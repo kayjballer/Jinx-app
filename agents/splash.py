@@ -1,8 +1,7 @@
-"""agents/splash.py — Ecran de telechargement au 1er lancement."""
+"""agents/splash.py — Écran de téléchargement."""
 from __future__ import annotations
 
 import threading
-
 from kivy.uix.modalview import ModalView
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
@@ -16,22 +15,22 @@ def afficher_splash_dl(downloader, on_done, on_error=None):
                    background_color=(0.04, 0.03, 0.02, 0.98))
     root = BoxLayout(orientation="vertical", padding=dp(24), spacing=dp(16))
 
-    titre = Label(text="[b]Installation de Jinx[/b]", markup=True,
-                  font_size=sp(22), size_hint_y=None, height=dp(40),
-                  color=(0.95, 0.75, 0.35, 1))
-    root.add_widget(titre)
+    root.add_widget(Label(
+        text="[b]Installation de Jinx[/b]", markup=True,
+        font_size=sp(22), size_hint_y=None, height=dp(40),
+        color=(0.95, 0.75, 0.35, 1)))
 
-    sous = Label(text="Jinx telecharge les modeles IA.\n"
-                      "Cette operation n'a lieu qu'une seule fois.",
-                 font_size=sp(13), size_hint_y=None, height=dp(60),
-                 halign="center", valign="middle")
+    sous = Label(
+        text="Jinx télécharge le modèle IA.\nCette opération n'a lieu qu'une seule fois.",
+        font_size=sp(13), size_hint_y=None, height=dp(60),
+        halign="center", valign="middle")
     sous.bind(size=sous.setter("text_size"))
     root.add_widget(sous)
 
     bar = ProgressBar(max=1.0, value=0.0, size_hint_y=None, height=dp(24))
     root.add_widget(bar)
 
-    statut = Label(text="Preparation...", font_size=sp(12),
+    statut = Label(text="Préparation...", font_size=sp(12),
                    size_hint_y=None, height=dp(60),
                    halign="center", valign="middle", color=(1, 1, 1, 0.8))
     statut.bind(size=statut.setter("text_size"))

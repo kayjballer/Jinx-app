@@ -40,11 +40,10 @@ except Exception:
     CTX = ssl.create_default_context()
 
 
+from agents.core import get_core
 from agents import build_default_director, ModelManager, ModelDownloader
 from agents.splash import afficher_splash_dl
-from agents.panel import ouvrir_panneau_agents
 from agents.bulle2d import Bulle2D
-from agents.conversations import ConversationStore
 
 VERSION = "0.31"
 STOP_TTS = False
@@ -420,12 +419,18 @@ def parler_texte(texte, force=False):
 
 
 MODELES = {
-    "1.5B": dict(fichier="qwen.gguf",
-                 url="https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
-                 mini=1100000000, total=1117320736),
-    "3B": dict(fichier="qwen3b.gguf",
-               url="https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf",
-               mini=1850000000, total=1930000000),
+    "1.5B": {
+        "fichier": "default.gguf",
+        "url": "https://huggingface.co/Qwen/Qwen3.5-2B-Instruct-GGUF/resolve/main/qwen3.5-2b-instruct-q4_k_m.gguf",
+        "mini": 800000000,
+        "total": 1300000000,
+    },
+    "3B": {
+        "fichier": "default.gguf",
+        "url": "https://huggingface.co/Qwen/Qwen3.5-2B-Instruct-GGUF/resolve/main/qwen3.5-2b-instruct-q4_k_m.gguf",
+        "mini": 800000000,
+        "total": 1300000000,
+    },
 }
 
 
@@ -1114,94 +1119,7 @@ class JinxApp(App):
             dossier=dossier,
             model_manager=self.model_manager,
         )
-        self.director._init_conv_store(dossier)
         self.lbl.text = "Pret ! Touche la bulle pour parler."
-
-
-    def _telecharger_manuel(self, *a):
-        dossier = self.user_data_dir
-        dossier_models = os.path.join(dossier, "models")
-        if not hasattr(self, "downloader"):
-            self.downloader = ModelDownloader(dossier_models)
-        manquants = self.downloader.manquants()
-        if not manquants:
-            self.lbl.text = "Tous les modeles sont deja installes."
-            self._modeles_prets()
-            return
-        self.lbl.text = "Telechargement de %d modele(s)..." % len(manquants)
-        afficher_splash_dl(
-            self.downloader,
-            on_done=self._modeles_prets,
-            on_error=lambda: setattr(
-                self.lbl, "text",
-                "Erreur pendant le telechargement. Relance Jinx."),
-        )
-
-
-    def _ouvrir_historique(self, *a):
-        from kivy.uix.modalview import ModalView
-        from kivy.uix.scrollview import ScrollView
-        from kivy.uix.boxlayout import BoxLayout
-        from kivy.uix.label import Label
-        from kivy.uix.button import Button
-
-        store = ConversationStore(self.user_data_dir)
-        n = store.compter()
-        convs = store.lister(limite=50)
-
-        mv = ModalView(size_hint=(0.94, 0.85),
-                       background_color=(0.04, 0.03, 0.02, 0.98))
-        root = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(8))
-
-        titre = Label(text="[b]Historique — %d conversation(s)[/b]" % n,
-                      markup=True, size_hint_y=None, height=dp(36),
-                      font_size="16sp", color=(0.95, 0.75, 0.35, 1))
-        root.add_widget(titre)
-
-        if not convs:
-            root.add_widget(Label(text="Aucune conversation enregistrée."))
-        else:
-            sv = ScrollView()
-            liste = BoxLayout(orientation="vertical", size_hint_y=None,
-                              spacing=dp(6))
-            liste.bind(minimum_height=liste.setter("height"))
-            for c in convs:
-                card = BoxLayout(orientation="vertical", size_hint_y=None,
-                                 height=dp(90), padding=dp(6), spacing=dp(2))
-                q = c["question"][:80]
-                r = c["reponse"][:120]
-                lbl = Label(text="[b]%s[/b] (%s)\n%s" % (c["ts"][:16], c["agent"], q),
-                            markup=True, size_hint_y=None, height=dp(28),
-                            halign="left", valign="middle", font_size="12sp")
-                lbl.bind(size=lbl.setter("text_size"))
-                rep = Label(text="→ " + r,
-                            size_hint_y=None, height=dp(48),
-                            halign="left", valign="top", font_size="11sp",
-                            color=(0.85, 0.85, 0.85, 1))
-                rep.bind(size=rep.setter("text_size"))
-                card.add_widget(lbl)
-                card.add_widget(rep)
-                liste.add_widget(card)
-            sv.add_widget(liste)
-            root.add_widget(sv)
-
-        btns = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
-        bt_eff = Button(text="Effacer tout", background_color=(0.7, 0.2, 0.15, 1))
-        bt_fer = Button(text="Fermer")
-
-        def effacer(*a):
-            n2 = store.effacer_tout()
-            self.lbl.text = "Historique effacé : %d supprimées." % n2
-            mv.dismiss()
-
-        bt_eff.bind(on_release=effacer)
-        bt_fer.bind(on_release=lambda *a: mv.dismiss())
-        btns.add_widget(bt_eff)
-        btns.add_widget(bt_fer)
-        root.add_widget(btns)
-
-        mv.add_widget(root)
-        mv.open()
 
 
     # ---------------------------------------------------------- STOP
@@ -1319,131 +1237,6 @@ class JinxApp(App):
             print(f"Fallback notif échoué : {e}")
         return False
 
-
-    def _demander_confirmation(self, agent, query, message):
-        """Affiche une modale pour confirmer une action critique."""
-        from kivy.uix.modalview import ModalView
-        from kivy.uix.boxlayout import BoxLayout
-        from kivy.uix.label import Label
-        from kivy.uix.button import Button
-
-        mv = ModalView(size_hint=(0.9, 0.4),
-                       background_color=(0.05, 0.04, 0.02, 0.98),
-                       auto_dismiss=False)
-        root = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(10))
-
-        root.add_widget(Label(
-            text="[b]Confirmation requise[/b]\n\n" + message,
-            markup=True, font_size="14sp",
-            halign="center", valign="middle"))
-        root.add_widget(Label(
-            text="« %s »" % query[:80],
-            font_size="12sp", color=(0.9, 0.75, 0.3, 1),
-            halign="center"))
-
-        btns = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(8))
-
-        def autoriser(*a):
-            mv.dismiss()
-            self.bulle.set_etat("reflexion")
-            self.etat_lbl.text = "Julie réfléchit..."
-            def _run():
-                rep = self.director.confirmer_action(agent, query)
-                def _aff(d):
-                    self.repondre(query, rep)
-                Clock.schedule_once(_aff, 0)
-            import threading
-            threading.Thread(target=_run, daemon=True).start()
-
-        def refuser(*a):
-            mv.dismiss()
-            self.repondre(query, "Action annulée.")
-
-        bt_oui = Button(text="Autoriser",
-                        background_color=(0.2, 0.55, 0.25, 1))
-        bt_non = Button(text="Refuser",
-                        background_color=(0.6, 0.2, 0.15, 1))
-        bt_oui.bind(on_release=autoriser)
-        bt_non.bind(on_release=refuser)
-        btns.add_widget(bt_oui)
-        btns.add_widget(bt_non)
-        root.add_widget(btns)
-
-        mv.add_widget(root)
-        mv.open()
-
-
-    def _voir_permissions(self, *a):
-        """Affiche la liste des agents et leur niveau de permission."""
-        from agents.permissions import Niveau
-        from kivy.uix.modalview import ModalView
-        from kivy.uix.scrollview import ScrollView
-        from kivy.uix.boxlayout import BoxLayout
-        from kivy.uix.label import Label
-        from kivy.uix.button import Button
-
-        if not getattr(self, "director", None) or not self.director.perms:
-            self.lbl.text = "Directeur non prêt."
-            return
-
-        perms = self.director.perms
-
-        mv = ModalView(size_hint=(0.94, 0.85),
-                       background_color=(0.04, 0.03, 0.02, 0.98))
-        root = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(8))
-
-        root.add_widget(Label(
-            text="[b]Permissions des agents[/b]",
-            markup=True, size_hint_y=None, height=dp(36),
-            font_size="16sp", color=(0.95, 0.75, 0.35, 1)))
-
-        legendes = Label(
-            text="🟢 Passif (lecture) · 🟡 Actif (annoncé) · 🔴 Critique (confirmation)",
-            font_size="11sp", size_hint_y=None, height=dp(28),
-            color=(0.8, 0.8, 0.8, 1))
-        root.add_widget(legendes)
-
-        sv = ScrollView()
-        liste = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6))
-        liste.bind(minimum_height=liste.setter("height"))
-
-        icones = {Niveau.PASSIF: "🟢", Niveau.ACTIF: "🟡", Niveau.CRITIQUE: "🔴"}
-        ordre = [Niveau.PASSIF, Niveau.ACTIF, Niveau.CRITIQUE]
-
-        for nom in sorted(self.director.agents.keys()):
-            niv = perms.niveau(nom)
-
-            row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
-            lbl = Label(text="%s %s" % (icones.get(niv, "?"), nom),
-                        halign="left", valign="middle", font_size="13sp")
-            lbl.bind(size=lbl.setter("text_size"))
-            row.add_widget(lbl)
-
-            def changer(n=nom):
-                niveaux = ordre
-                i = niveaux.index(perms.niveau(n))
-                nouveau = niveaux[(i + 1) % 3]
-                perms.set_niveau(n, nouveau)
-                mv.dismiss()
-                self._voir_permissions()
-
-            bt = Button(text=niv.value.upper(),
-                        size_hint=(None, 1), width=dp(90),
-                        font_size="11sp",
-                        background_color=(0.3, 0.25, 0.12, 1))
-            bt.bind(on_release=lambda *a, n=nom: changer(n))
-            row.add_widget(bt)
-            liste.add_widget(row)
-
-        sv.add_widget(liste)
-        root.add_widget(sv)
-
-        bt_fer = Button(text="Fermer", size_hint_y=None, height=dp(48))
-        bt_fer.bind(on_release=lambda *a: mv.dismiss())
-        root.add_widget(bt_fer)
-
-        mv.add_widget(root)
-        mv.open()
 
     def touche_titre(self, w, touch):
         if w.collide_point(*touch.pos):
@@ -1591,17 +1384,6 @@ class JinxApp(App):
         def _reponse(rep):
             if self.stop_requested:
                 self.stop_requested = False
-                return
-            # Confirmation requise ?
-            if isinstance(rep, str) and rep.startswith("[JINX_CONFIRM]"):
-                try:
-                    contenu = rep.replace("[JINX_CONFIRM]", "", 1)
-                    agent, query, msg = contenu.split("|||", 2)
-                    Clock.schedule_once(
-                        lambda d: self._demander_confirmation(agent, query, msg),
-                        0)
-                except Exception as e:
-                    print("Erreur parsing CONFIRM:", e)
                 return
             if SET.get("historique"):
                 try:
@@ -1768,18 +1550,7 @@ class JinxApp(App):
             box.add_widget(sl)
             ligne(texte, box, 62)
 
-        def _ouvrir_agents_v4():
-            if getattr(self, "director", None):
-                ouvrir_panneau_agents(self.director)
-            else:
-                self.lbl.text = "Modeles pas encore prets."
-
-        section("Agent Directeur")
         note("Le directeur orchestre les 6 agents de Jinx.")
-        pleine("Voir les agents", _ouvrir_agents_v4)
-        pleine("Telecharger les modeles", self._telecharger_manuel)
-        pleine("Historique des conversations", self._ouvrir_historique)
-        pleine("Permissions des agents", self._voir_permissions)
 
         haut = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         haut.add_widget(Label(text="Paramètres", bold=True, font_size="20sp",
@@ -1808,7 +1579,6 @@ class JinxApp(App):
         pleine("Tester la voix",
                lambda: parler_texte("Salut, c'est Jinx. Comment ça va ?", True))
 
-        section("Intelligence")
         choix("Personnalité", "perso", ["taquine", "serieuse", "pro", "coach"],
               {"taquine": "Taquine", "serieuse": "Sérieuse",
                "pro": "Professionnelle", "coach": "Coach"})
@@ -1830,11 +1600,7 @@ class JinxApp(App):
             sauver()
         ti.bind(text=nom_change)
         ligne("Comment t'appeler", ti)
-        choix("Modèle IA (puis redémarrer le cerveau)", "modele",
-              ["1.5B", "3B"],
-              {"1.5B": "1,5B rapide", "3B": "3B plus fin"})
 
-        section("Mémoire")
         interrupteur("Utiliser la mémoire", "memoire")
         interrupteur("Enregistrer l'historique", "historique")
         pleine("Voir mes souvenirs", self.voir_souvenirs)
@@ -1856,7 +1622,7 @@ class JinxApp(App):
 
         section("Système")
         etat = "prêt" if serveur_pret() else "arrêté"
-        note("Cerveau : %s (modèle %s)" % (etat, SET["modele"]))
+        note("Cerveau : Qwen 3.5 2B")
         pleine("Redémarrer le cerveau",
                lambda: (mv.dismiss(),
                         self.demarrer_cerveau(avant=arreter_cerveau)))
