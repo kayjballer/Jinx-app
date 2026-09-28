@@ -78,7 +78,7 @@ def _stop_tts():
             _p.stop()
     except Exception:
         pass
-URL = "http://127.0.0.1:8080/v1/chat/completions"
+URL = "http://127.0.0.1:48291/v1/chat/completions"
 PROC = None
 
 DEFAUT = {
@@ -436,7 +436,7 @@ MODELES = {
 
 def serveur_pret():
     try:
-        with request.urlopen("http://127.0.0.1:8080/health", timeout=2) as r:
+        with request.urlopen("http://127.0.0.1:48291/health", timeout=2) as r:
             return r.status == 200
     except Exception:
         return False
@@ -549,7 +549,7 @@ def lancer_cerveau(dossier, statut):
         return False
     log = open(os.path.join(dossier, "serveur.log"), "w")
     PROC = subprocess.Popen(
-        [binaire, "-m", modele, "--host", "127.0.0.1", "--port", "8080",
+        [binaire, "-m", modele, "--host", "127.0.0.1", "--port", "48291",
          "-c", "2048", "-t", "4"],
         stdout=log, stderr=subprocess.STDOUT)
     statut("Chargement du cerveau...")

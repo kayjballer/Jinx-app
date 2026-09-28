@@ -91,7 +91,18 @@ class Director:
                 body = json.loads(r.read().decode("utf-8"))
             return body["choices"][0]["message"]["content"].strip()
         except Exception as e:
-            log.error("appel_llm: %s", e)
+            import traceback
+            err = traceback.format_exc()
+            log.error("appel_llm: %s", err)
+            # Écrire dans un fichier pour debug
+            try:
+                with open("/sdcard/jinx_crash.log", "a") as f:
+                    f.write("\n=== ERREUR LLM ===\n")
+                    f.write(f"URL : {url}\n")
+                    f.write(f"Erreur : {e}\n")
+                    f.write(err)
+            except Exception:
+                pass
             return f"Erreur LLM : {e}"
 
     def handle(self, query: str,
