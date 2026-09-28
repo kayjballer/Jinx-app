@@ -1102,6 +1102,21 @@ class JinxApp(App):
             self._modeles_prets()
 
     def _modeles_prets(self, *a):
+        try:
+            self._modeles_prets_impl(*a)
+        except Exception as e:
+            import traceback
+            err = traceback.format_exc()
+            print("CRASH _modeles_prets:", err)
+            try:
+                with open("/sdcard/jinx_crash.log", "a") as f:
+                    f.write("\n=== CRASH _modeles_prets ===\n")
+                    f.write(err)
+            except Exception:
+                pass
+            self.lbl.text = f"Erreur : {str(e)[:100]}"
+
+    def _modeles_prets_impl(self, *a):
         dossier = self.user_data_dir
         dossier_models = os.path.join(dossier, "models")
         llama_binaire = trouver_llama_server(dossier)

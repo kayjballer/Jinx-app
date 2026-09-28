@@ -1,4 +1,4 @@
-"""agents/model_manager.py — llama-server simplifié (1 modèle)."""
+"""agents/model_manager.py — llama-server minimal (sans flags risqués)."""
 from __future__ import annotations
 
 import logging
@@ -42,40 +42,30 @@ class ModelManager:
         port = CATALOG[nom]["port"]
         return f"http://127.0.0.1:{port}/v1/chat/completions"
 
-    def _attendre_pret(self, port: int, timeout: int = 60) -> bool:
+    def _attendre_pret(self, port: int, timeout: int = 90) -> bool:
         url = f"http://127.0.0.1:{port}/health"
         t0 = time.time()
         while time.time() - t0 < timeout:
             try:
-                req2 = request.Request(url)
-                req2.add_header("User-Agent", "Jinx/1.0")
-                with request.urlopen(req2, timeout=2) as r:
+                req = request.Request(url)
+                req.add_header("User-Agent", "Jinx/1.0")
+                with request.urlopen(req, timeout=2) as r:
                     if r.status == 200:
                         return True
             except Exception:
                 pass
-            time.sleep(0.8)
+            time.sleep(1.0)
         return False
 
-    def _cmd(self, nom: str, chemin: str, port: int, safe: bool = False) -> list:
-        base = [self.binaire, "-m", chemin, "--port", str(port),
-                "-c", "2048", "-t", str(self.nb_threads), "--log-disable"]
-        if safe:
-            return base
-        return base + ["-b", "512", "-fa", "--no-warmup"]
-
-    def _essayer(self, nom: str, chemin: str, port: int, safe: bool) -> bool:
-        cmd = self._cmd(nom, chemin, port, safe=safe)
-        mode = "SAFE" if safe else "OPTIM"
-        log.info("Démarrage %s [%s]", nom, mode)
-        try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, cwd=self.dossier)
-            self.procs[nom] = proc
-        except Exception as e:
-            log.error("Lancement %s : %s", nom, e)
-            return False
-        return self._attendre_pret(port, timeout=90)
+    def _cmd(self, nom: str, chemin: str, port: int) -> list:
+        """Commande MINIMALE — aucun flag exotique."""
+        return [
+            self.binaire,
+            "-m", chemin,
+            "--port", str(port),
+            "-c", "2048",
+            "-t", str(self.nb_threads),
+        ]
 
     def _demarrer(self, nom: str) -> bool:
         if nom in self.procs and self.procs[nom].poll() is None:
@@ -84,11 +74,35 @@ class ModelManager:
         if not os.path.exists(chemin):
             log.error("Modèle %s absent : %s", nom, chemin)
             return False
+
         port = CATALOG[nom]["port"]
-        if self._essayer(nom, chemin, port, safe=False):
-            return True
-        log.warning("Fallback SAFE")
-        return self._essayer(nom, chemin, port, safe=True)
+        cmd = self._cmd(nom, chemin, port)
+        log.info("Démarrage %s : %s", nom, " ".join(cmd))
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=self.dossier,
+            )
+            self.procs[nom] = proc
+        except Exception as e:
+            log.error("Lancement %s échoué : %s", nom, e)
+            return False
+
+        ok = self._attendre_pret(port, timeout=120)
+        if ok:
+            log.info("Modèle %s prêt sur port %d", nom, port)
+        else:
+            log.error("Modèle %s timeout", nom)
+            # Récupérer les logs du process mort
+            try:
+                out, err = proc.communicate(timeout=2)
+                log.error("STDERR llama-server : %s", err.decode()[:500])
+            except Exception:
+                pass
+        return ok
 
     def ensure(self, nom: str = "default") -> Optional[str]:
         with self._lock:
