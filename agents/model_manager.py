@@ -14,6 +14,9 @@ from .models_catalog import CATALOG
 
 log = logging.getLogger("jinx.models")
 
+import urllib.request as _ur
+_OPENER = _ur.build_opener(_ur.ProxyHandler({}))
+
 
 def _nb_threads() -> int:
     try:
@@ -49,7 +52,7 @@ class ModelManager:
             try:
                 req = request.Request(url)
                 req.add_header("User-Agent", "Jinx/1.0")
-                with request.urlopen(req, timeout=2) as r:
+                with _OPENER.open(req, timeout=2) as r:
                     if r.status == 200:
                         return True
             except Exception:

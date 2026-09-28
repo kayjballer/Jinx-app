@@ -10,6 +10,10 @@ from urllib import request
 
 log = logging.getLogger("jinx.director")
 
+# Bypass proxy Android (127.0.0.1 ne doit PAS passer par un proxy)
+import urllib.request as _ur
+_OPENER = _ur.build_opener(_ur.ProxyHandler({}))
+
 
 class Director:
     def __init__(self, model_manager=None):
@@ -87,7 +91,7 @@ class Director:
         req = request.Request(url, data=data,
                               headers={"Content-Type": "application/json"})
         try:
-            with request.urlopen(req, timeout=timeout) as r:
+            with _OPENER.open(req, timeout=timeout) as r:
                 body = json.loads(r.read().decode("utf-8"))
             return body["choices"][0]["message"]["content"].strip()
         except Exception as e:

@@ -41,6 +41,10 @@ except Exception:
 
 
 from agents.core import get_core
+
+# Bypass proxy Android (indispensable pour 127.0.0.1)
+import urllib.request as _ur_main
+_OPENER_MAIN = _ur_main.build_opener(_ur_main.ProxyHandler({}))
 from agents import build_default_director, ModelManager, ModelDownloader
 from agents.splash import afficher_splash_dl
 from agents.bulle2d import Bulle2D
@@ -436,7 +440,7 @@ MODELES = {
 
 def serveur_pret():
     try:
-        with request.urlopen("http://127.0.0.1:48291/health", timeout=2) as r:
+        with _OPENER_MAIN.open("http://127.0.0.1:48291/health", timeout=2) as r:
             return r.status == 200
     except Exception:
         return False
