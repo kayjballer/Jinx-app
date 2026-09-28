@@ -47,7 +47,9 @@ class ModelManager:
         t0 = time.time()
         while time.time() - t0 < timeout:
             try:
-                with request.urlopen(url, timeout=2) as r:
+                req2 = request.Request(url)
+                req2.add_header("User-Agent", "Jinx/1.0")
+                with request.urlopen(req2, timeout=2) as r:
                     if r.status == 200:
                         return True
             except Exception:

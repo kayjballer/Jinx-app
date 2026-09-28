@@ -53,6 +53,8 @@ class ModelDownloader:
         deja = os.path.getsize(part) if os.path.exists(part) else 0
 
         req = request.Request(info["url"])
+        req.add_header("User-Agent", "Mozilla/5.0 (Linux; Android 10) Jinx/1.0")
+        req.add_header("Accept", "*/*")
         if deja > 0:
             req.add_header("Range", f"bytes={deja}-")
 
