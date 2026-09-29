@@ -47,7 +47,6 @@ import urllib.request as _ur_main
 _OPENER_MAIN = _ur_main.build_opener(_ur_main.ProxyHandler({}))
 from agents import build_default_director, ModelManager, ModelDownloader
 from agents.splash import afficher_splash_dl
-from agents.bulle2d import Bulle2D
 
 VERSION = "0.31"
 STOP_TTS = False
@@ -1138,6 +1137,7 @@ class JinxApp(App):
             dossier=dossier,
             model_manager=self.model_manager,
         )
+        self.director.set_core(get_core())
         self.lbl.text = "Pret ! Touche la bulle pour parler."
 
 

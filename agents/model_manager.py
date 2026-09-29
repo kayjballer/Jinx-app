@@ -14,6 +14,7 @@ from .models_catalog import CATALOG
 
 log = logging.getLogger("jinx.models")
 
+import http.client
 import urllib.request as _ur
 _OPENER = _ur.build_opener(_ur.ProxyHandler({}))
 
@@ -46,19 +47,25 @@ class ModelManager:
         return f"http://127.0.0.1:{port}/v1/chat/completions"
 
     def _attendre_pret(self, port: int, timeout: int = 90) -> bool:
-        url = f"http://127.0.0.1:{port}/health"
+        """Health check direct via socket (bypass proxy Android)."""
         t0 = time.time()
         while time.time() - t0 < timeout:
             try:
-                req = request.Request(url)
-                req.add_header("User-Agent", "Jinx/1.0")
-                with _OPENER.open(req, timeout=2) as r:
-                    if r.status == 200:
-                        return True
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+                conn.request("GET", "/health",
+                             headers={"User-Agent": "Jinx/1.0",
+                                      "Connection": "close"})
+                resp = conn.getresponse()
+                code = resp.status
+                resp.read()
+                conn.close()
+                if code == 200:
+                    return True
             except Exception:
                 pass
             time.sleep(1.0)
         return False
+
 
     def _cmd(self, nom: str, chemin: str, port: int) -> list:
         """Commande MINIMALE — aucun flag exotique."""

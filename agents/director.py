@@ -11,6 +11,7 @@ from urllib import request
 log = logging.getLogger("jinx.director")
 
 # Bypass proxy Android (127.0.0.1 ne doit PAS passer par un proxy)
+import http.client
 import urllib.request as _ur
 _OPENER = _ur.build_opener(_ur.ProxyHandler({}))
 
@@ -78,7 +79,16 @@ class Director:
             f"Utilisateur : {query}\nJinx :"
         )
 
-    def _appeler_llm(self, prompt: str, url: str, timeout: int = 120) -> str:
+    def _appeler_llm(self, prompt, url, timeout=120):
+        """Appel HTTP direct via socket (contourne proxy Android)."""
+        import re as _re
+        m = _re.match(r"http://([^:/]+):(\d+)(.*)", url)
+        if not m:
+            return "URL invalide : " + url
+        host = m.group(1)
+        port = int(m.group(2))
+        path = m.group(3)
+
         payload = {
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.6,
@@ -87,27 +97,46 @@ class Director:
             "stream": False,
             "stop": ["\nUtilisateur :", "\nUser :"],
         }
-        data = json.dumps(payload).encode("utf-8")
-        req = request.Request(url, data=data,
-                              headers={"Content-Type": "application/json"})
+        body = json.dumps(payload).encode("utf-8")
+
         try:
-            with _OPENER.open(req, timeout=timeout) as r:
-                body = json.loads(r.read().decode("utf-8"))
-            return body["choices"][0]["message"]["content"].strip()
+            conn = http.client.HTTPConnection(host, port, timeout=timeout)
+            conn.request("POST", path, body=body, headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "Jinx/1.0",
+                "Connection": "close",
+            })
+            resp = conn.getresponse()
+            data = resp.read().decode("utf-8")
+            conn.close()
+
+            if resp.status != 200:
+                try:
+                    with open("/sdcard/jinx_crash.log", "a") as f:
+                        f.write("\n=== HTTP " + str(resp.status) + " ===\n")
+                        f.write("URL : " + url + "\n")
+                        f.write(data[:500] + "\n")
+                except Exception:
+                    pass
+                return "Erreur HTTP " + str(resp.status)
+
+            parsed = json.loads(data)
+            return parsed["choices"][0]["message"]["content"].strip()
         except Exception as e:
             import traceback
             err = traceback.format_exc()
             log.error("appel_llm: %s", err)
-            # Écrire dans un fichier pour debug
             try:
                 with open("/sdcard/jinx_crash.log", "a") as f:
                     f.write("\n=== ERREUR LLM ===\n")
-                    f.write(f"URL : {url}\n")
-                    f.write(f"Erreur : {e}\n")
+                    f.write("URL : " + url + "\n")
+                    f.write("Erreur : " + str(e) + "\n")
                     f.write(err)
             except Exception:
                 pass
-            return f"Erreur LLM : {e}"
+            return "Erreur LLM : " + str(e)
+
 
     def handle(self, query: str,
                context: Optional[Dict[str, Any]] = None) -> str:
